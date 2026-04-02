@@ -10,7 +10,13 @@ import type { AIModel } from '@/lib/types'
 // Main chat interface component
 export function ChatInterface() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<AIModel>('nano-fast')
+  const [selectedModel, setSelectedModel] = useState<AIModel>(() => {
+    if (typeof window !== 'undefined') {
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      return isMobile ? 'prime' : 'nano-fast';
+    }
+    return 'nano-fast';
+  })
   
   const {
     messages,
