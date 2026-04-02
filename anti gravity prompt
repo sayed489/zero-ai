@@ -1,0 +1,2306 @@
+You are implementing Zero AI's complete backend. Next.js 14 App Router + TypeScript + Supabase.
+ABSOLUTE RULE: Do NOT modify anything in /components/ or any .tsx file.
+Create only: /app/api/**, /lib/**, /hooks/**, /middleware.ts, /supabase/migrations/**, vercel.json
+
+Read everything before writing any code. Implement all sections completely.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1: SUPABASE SCHEMA (create first)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /supabase/migrations/001_zero_ai.sql
+
+-- Enable extensions
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+-- Users/profiles
+ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'nano';
+ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS messages_today INT DEFAULT 0;
+ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS last_reset DATE DEFAULT CURRENT_DATE;
+
+CREATE TABLE IF NOT EXISTS profiles (
+  id UUID REFERENCES auth.users PRIMARY KEY,
+  plan TEXT DEFAULT 'nano',
+  messages_today INT DEFAULT 0,
+  last_reset DATE DEFAULT CURRENT_DATE,
+  nano_cached BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Memory
+CREATE TABLE IF NOT EXISTS user_memories (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users NOT NULL,
+  fact TEXT NOT NULL,
+  embedding vector(768),
+  importance INT DEFAULT 1,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX ON user_memories USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- Conversations
+CREATE TABLE IF NOT EXISTS conversations (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users NOT NULL,
+  title TEXT,
+  model_tier TEXT DEFAULT 'nano',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Messages
+CREATE TABLE IF NOT EXISTS messages (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  conversation_id UUID REFERENCES conversations NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  provider TEXT,
+  model TEXT,
+  tokens_used INT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Compare votes
+CREATE TABLE IF NOT EXISTS comparison_votes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users,
+  prompt_hash TEXT NOT NULL,
+  winner TEXT NOT NULL,
+  model_a TEXT,
+  model_b TEXT,
+  model_c TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- App factory builds
+CREATE TABLE IF NOT EXISTS app_builds (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users,
+  description TEXT,
+  template_used TEXT,
+  files JSONB,
+  stackblitz_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Subscriptions
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users UNIQUE NOT NULL,
+  razorpay_subscription_id TEXT,
+  razorpay_payment_id TEXT,
+  plan TEXT NOT NULL,
+  status TEXT DEFAULT 'active',
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ
+);
+
+-- Provider health tracking
+CREATE TABLE IF NOT EXISTS provider_health (
+  id TEXT PRIMARY KEY,
+  status TEXT DEFAULT 'unknown',
+  last_checked TIMESTAMPTZ,
+  error_count INT DEFAULT 0,
+  avg_latency_ms INT
+);
+
+-- RLS policies
+ALTER TABLE user_memories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "users own memories" ON user_memories FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "users own conversations" ON conversations FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "users own messages" ON messages FOR ALL USING (
+  conversation_id IN (SELECT id FROM conversations WHERE user_id = auth.uid())
+);
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2: PROVIDER SYSTEM WITH HF AUTO-PING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/providers/types.ts
+
+export interface Message {
+  role: "user" | "assistant" | "system"
+  content: string | ContentPart[]
+}
+export interface ContentPart {
+  type: "text" | "image_url"
+  text?: string
+  image_url?: { url: string }
+}
+export interface ProviderConfig {
+  id: string
+  name: string
+  endpoint: string
+  apiKey: string
+  model: string
+  tier: "nano" | "prime" | "apex" | "agent"
+  maxTokens: number
+  supportsVision: boolean
+  supportsStreaming: boolean
+  rateLimit: number
+  priority: number
+}
+export interface StreamChunk {
+  type: "token" | "done" | "error" | "provider_switch"
+  content?: string
+  provider?: string
+  model?: string
+  error?: string
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/providers/configs.ts
+
+import { ProviderConfig } from "./types"
+
+export const PROVIDERS: Record<string, ProviderConfig[]> = {
+  nano: [
+    {
+      id: "gemini-flash-nano",
+      name: "Gemini Flash",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent",
+      apiKey: process.env.GEMINI_KEY!,
+      model: "gemini-1.5-flash",
+      tier: "nano",
+      maxTokens: 2048,
+      supportsVision: true,
+      supportsStreaming: true,
+      rateLimit: 60,
+      priority: 1
+    },
+    {
+      id: "cerebras-nano",
+      name: "Cerebras",
+      endpoint: "https://api.cerebras.ai/v1/chat/completions",
+      apiKey: process.env.CEREBRAS_KEY!,
+      model: "llama-3.3-70b",
+      tier: "nano",
+      maxTokens: 2048,
+      supportsVision: false,
+      supportsStreaming: true,
+      rateLimit: 30,
+      priority: 2
+    }
+  ],
+  prime: [
+    // SiliconFlow keys 1-6 rotated
+    ...Array.from({length: 6}, (_, i) => ({
+      id: `siliconflow-prime-${i+1}`,
+      name: "SiliconFlow Prime",
+      endpoint: "https://api.siliconflow.cn/v1/chat/completions",
+      apiKey: process.env[`SILICONFLOW_KEY_${i+1}`]!,
+      model: "Qwen/Qwen2.5-7B-Instruct",
+      tier: "prime" as const,
+      maxTokens: 4096,
+      supportsVision: false,
+      supportsStreaming: true,
+      rateLimit: 100,
+      priority: i + 1
+    })),
+    {
+      id: "hf-prime-1",
+      name: "HF Prime",
+      endpoint: `https://${process.env.HF_SPACE_PRIME_1}.hf.space/api/predict`,
+      apiKey: process.env.HF_TOKEN_1!,
+      model: "Qwen2.5-7B",
+      tier: "prime",
+      maxTokens: 4096,
+      supportsVision: false,
+      supportsStreaming: false,
+      rateLimit: 50,
+      priority: 8
+    },
+    // Add HF_SPACE_PRIME_2 through 6 same pattern...
+    {
+      id: "cerebras-prime",
+      name: "Cerebras",
+      endpoint: "https://api.cerebras.ai/v1/chat/completions",
+      apiKey: process.env.CEREBRAS_KEY!,
+      model: "qwen-3-32b",
+      tier: "prime",
+      maxTokens: 4096,
+      supportsVision: false,
+      supportsStreaming: true,
+      rateLimit: 30,
+      priority: 15
+    },
+    {
+      id: "gemini-prime-fallback",
+      name: "Gemini Flash",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent",
+      apiKey: process.env.GEMINI_KEY!,
+      model: "gemini-1.5-flash",
+      tier: "prime",
+      maxTokens: 4096,
+      supportsVision: true,
+      supportsStreaming: true,
+      rateLimit: 60,
+      priority: 20
+    }
+  ],
+  apex: [
+    {
+      id: "fireworks-apex",
+      name: "Fireworks Qwen",
+      endpoint: "https://api.fireworks.ai/inference/v1/chat/completions",
+      apiKey: process.env.FIREWORKS_KEY!,
+      model: "accounts/fireworks/models/qwen2p5-72b-instruct",
+      tier: "apex",
+      maxTokens: 8192,
+      supportsVision: false,
+      supportsStreaming: true,
+      rateLimit: 100,
+      priority: 1
+    },
+    {
+      id: "siliconflow-apex",
+      name: "SiliconFlow Apex",
+      endpoint: "https://api.siliconflow.cn/v1/chat/completions",
+      apiKey: process.env.SILICONFLOW_KEY_1!,
+      model: "Qwen/Qwen2.5-32B-Instruct",
+      tier: "apex",
+      maxTokens: 8192,
+      supportsVision: false,
+      supportsStreaming: true,
+      rateLimit: 100,
+      priority: 2
+    },
+    {
+      id: "novita-apex",
+      name: "Novita AI",
+      endpoint: "https://api.novita.ai/v3/openai/chat/completions",
+      apiKey: process.env.NOVITA_KEY!,
+      model: "qwen/qwen2.5-72b-instruct",
+      tier: "apex",
+      maxTokens: 8192,
+      supportsVision: false,
+      supportsStreaming: true,
+      rateLimit: 50,
+      priority: 3
+    },
+    {
+      id: "together-apex",
+      name: "Together AI",
+      endpoint: "https://api.together.xyz/v1/chat/completions",
+      apiKey: process.env.TOGETHER_KEY!,
+      model: "Qwen/Qwen2.5-72B-Instruct-Turbo",
+      tier: "apex",
+      maxTokens: 8192,
+      supportsVision: false,
+      supportsStreaming: true,
+      rateLimit: 60,
+      priority: 4
+    },
+    {
+      id: "hf-apex-1",
+      name: "HF Apex",
+      endpoint: `https://${process.env.HF_SPACE_APEX_1}.hf.space/api/predict`,
+      apiKey: process.env.HF_TOKEN_APEX_1!,
+      model: "Qwen2.5-72B",
+      tier: "apex",
+      maxTokens: 8192,
+      supportsVision: false,
+      supportsStreaming: false,
+      rateLimit: 30,
+      priority: 5
+    },
+    {
+      id: "gemini-apex",
+      name: "Gemini Pro",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent",
+      apiKey: process.env.GEMINI_KEY!,
+      model: "gemini-1.5-pro",
+      tier: "apex",
+      maxTokens: 8192,
+      supportsVision: true,
+      supportsStreaming: true,
+      rateLimit: 30,
+      priority: 10
+    }
+  ]
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/providers/router.ts
+
+import { redis } from "@/lib/redis"
+import { PROVIDERS } from "./configs"
+import { Message, ProviderConfig, StreamChunk } from "./types"
+
+// Get available providers sorted by priority, skip exhausted/down ones
+export async function getAvailableProviders(tier: string): Promise<ProviderConfig[]> {
+  const providers = PROVIDERS[tier] || []
+  const statuses = await Promise.all(
+    providers.map(p => redis.get(`provider:${p.id}:status`))
+  )
+  return providers
+    .filter((p, i) => statuses[i] !== "exhausted" && statuses[i] !== "down")
+    .sort((a, b) => a.priority - b.priority)
+}
+
+// Core streaming function with auto-fallback
+export async function streamWithFallback(
+  messages: Message[],
+  tier: string,
+  systemPrompt?: string
+): Promise<ReadableStream> {
+  const providers = await getAvailableProviders(tier)
+  
+  return new ReadableStream({
+    async start(controller) {
+      const encode = (chunk: StreamChunk) =>
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`))
+
+      for (const provider of providers) {
+        try {
+          encode({ type: "provider_switch", provider: provider.name, model: provider.model })
+          
+          const stream = await callProvider(provider, messages, systemPrompt)
+          
+          for await (const token of stream) {
+            encode({ type: "token", content: token })
+          }
+          
+          encode({ type: "done", provider: provider.name, model: provider.model })
+          
+          // Mark success
+          await redis.set(`provider:${provider.id}:status`, "ok")
+          await redis.incr(`provider:${provider.id}:success_count`)
+          controller.close()
+          return
+          
+        } catch (err: any) {
+          console.error(`Provider ${provider.id} failed:`, err.message)
+          
+          if (err.status === 429) {
+            await redis.set(`provider:${provider.id}:status`, "exhausted", { ex: 3600 })
+          } else if (err.status >= 500) {
+            await redis.set(`provider:${provider.id}:status`, "down", { ex: 300 })
+          }
+          
+          // Increment error count
+          await redis.incr(`provider:${provider.id}:error_count`)
+          
+          // Try next provider
+          continue
+        }
+      }
+      
+      // All providers failed
+      encode({ type: "error", error: "All providers temporarily unavailable. Try again in a moment." })
+      controller.close()
+    }
+  })
+}
+
+// Unified provider caller - handles OpenAI-compatible + Gemini format
+async function* callProvider(
+  provider: ProviderConfig,
+  messages: Message[],
+  systemPrompt?: string
+): AsyncGenerator<string> {
+  
+  const allMessages = systemPrompt
+    ? [{ role: "system", content: systemPrompt }, ...messages]
+    : messages
+
+  // Gemini format
+  if (provider.endpoint.includes("googleapis.com")) {
+    yield* callGemini(provider, allMessages)
+    return
+  }
+
+  // HuggingFace Spaces format
+  if (provider.endpoint.includes(".hf.space")) {
+    yield* callHFSpace(provider, allMessages)
+    return
+  }
+
+  // OpenAI-compatible format (SiliconFlow, Fireworks, Together, Cerebras, Novita)
+  const res = await fetch(provider.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${provider.apiKey}`
+    },
+    body: JSON.stringify({
+      model: provider.model,
+      messages: allMessages,
+      max_tokens: provider.maxTokens,
+      stream: true,
+      temperature: 0.7
+    }),
+    signal: AbortSignal.timeout(30000)
+  })
+
+  if (!res.ok) {
+    const err: any = new Error(`${provider.id} error: ${res.status}`)
+    err.status = res.status
+    throw err
+  }
+
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const lines = decoder.decode(value).split("\n")
+    for (const line of lines) {
+      if (!line.startsWith("data: ") || line === "data: [DONE]") continue
+      try {
+        const json = JSON.parse(line.slice(6))
+        const token = json.choices?.[0]?.delta?.content
+        if (token) yield token
+      } catch {}
+    }
+  }
+}
+
+async function* callGemini(provider: ProviderConfig, messages: Message[]): AsyncGenerator<string> {
+  const url = `${provider.endpoint}?key=${provider.apiKey}&alt=sse`
+  const contents = messages
+    .filter(m => m.role !== "system")
+    .map(m => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: typeof m.content === "string" ? m.content : m.content[0] }]
+    }))
+  const systemInstruction = messages.find(m => m.role === "system")?.content
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents,
+      ...(systemInstruction && { systemInstruction: { parts: [{ text: systemInstruction }] } }),
+      generationConfig: { maxOutputTokens: provider.maxTokens }
+    }),
+    signal: AbortSignal.timeout(30000)
+  })
+  if (!res.ok) {
+    const err: any = new Error(`Gemini error: ${res.status}`)
+    err.status = res.status
+    throw err
+  }
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const lines = decoder.decode(value).split("\n")
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue
+      try {
+        const json = JSON.parse(line.slice(6))
+        const token = json.candidates?.[0]?.content?.parts?.[0]?.text
+        if (token) yield token
+      } catch {}
+    }
+  }
+}
+
+async function* callHFSpace(provider: ProviderConfig, messages: Message[]): AsyncGenerator<string> {
+  // Check if space is awake
+  const status = await redis.get(`hf:${provider.id}:status`)
+  if (status === "sleeping" || status === "waking") {
+    throw Object.assign(new Error("HF space sleeping"), { status: 503 })
+  }
+  
+  const lastMessage = messages[messages.length - 1]
+  const prompt = typeof lastMessage.content === "string" ? lastMessage.content : ""
+  
+  const res = await fetch(provider.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(provider.apiKey && { "Authorization": `Bearer ${provider.apiKey}` })
+    },
+    body: JSON.stringify({ data: [prompt, "", 512, 0.7, 0.95] }),
+    signal: AbortSignal.timeout(60000)
+  })
+  
+  if (!res.ok) {
+    const err: any = new Error(`HF error: ${res.status}`)
+    err.status = res.status
+    throw err
+  }
+  
+  const json = await res.json()
+  const text = json.data?.[0] || ""
+  // HF doesn't stream — yield chunks to simulate streaming
+  const words = text.split(" ")
+  for (const word of words) {
+    yield word + " "
+    await new Promise(r => setTimeout(r, 20))
+  }
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/providers/hfPing.ts
+
+HF SPACES AUTO-PING SYSTEM
+
+const HF_SPACES = {
+  prime: [
+    process.env.HF_SPACE_PRIME_1,
+    process.env.HF_SPACE_PRIME_2,
+    process.env.HF_SPACE_PRIME_3,
+    process.env.HF_SPACE_PRIME_4,
+    process.env.HF_SPACE_PRIME_5,
+    process.env.HF_SPACE_PRIME_6,
+  ].filter(Boolean),
+  apex: [
+    process.env.HF_SPACE_APEX_1,
+    process.env.HF_SPACE_APEX_2,
+    process.env.HF_SPACE_APEX_3,
+    process.env.HF_SPACE_APEX_4,
+  ].filter(Boolean)
+}
+
+export async function pingAllSpaces() {
+  const results = []
+  
+  for (const [tier, spaces] of Object.entries(HF_SPACES)) {
+    for (const spaceId of spaces) {
+      const url = `https://${spaceId?.replace("/", "-")}.hf.space`
+      const redisKey = `hf:space:${spaceId}:status`
+      
+      try {
+        const start = Date.now()
+        const res = await fetch(`${url}/`, {
+          signal: AbortSignal.timeout(8000),
+          method: "HEAD"
+        })
+        const latency = Date.now() - start
+        
+        if (res.ok || res.status === 200) {
+          await redis.set(redisKey, "awake", { ex: 300 })
+          await redis.set(`hf:space:${spaceId}:latency`, latency)
+          results.push({ space: spaceId, status: "awake", latency })
+        } else if (res.status === 503) {
+          // Space sleeping — wake it
+          await redis.set(redisKey, "waking", { ex: 120 })
+          fetch(`${url}/api/predict`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data: ["ping"] })
+          }).catch(() => {})
+          results.push({ space: spaceId, status: "waking" })
+        }
+      } catch {
+        await redis.set(redisKey, "sleeping", { ex: 60 })
+        results.push({ space: spaceId, status: "sleeping" })
+      }
+    }
+  }
+  return results
+}
+
+// Auto-wake a specific space
+export async function wakeSpace(spaceId: string) {
+  const url = `https://${spaceId.replace("/", "-")}.hf.space`
+  const token = process.env.HF_TOKEN_1
+  
+  // HF Spaces API to restart/wake
+  await fetch(`https://huggingface.co/api/spaces/${spaceId}/restart`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` }
+  }).catch(() => {})
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /app/api/cron/ping/route.ts
+
+import { pingAllSpaces } from "@/lib/providers/hfPing"
+import { NextResponse } from "next/server"
+
+export const runtime = "edge"
+
+export async function GET(req: Request) {
+  const authHeader = req.headers.get("authorization")
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response("Unauthorized", { status: 401 })
+  }
+  const results = await pingAllSpaces()
+  return NextResponse.json({ pinged: results.length, results })
+}
+
+vercel.json (create/update):
+{
+  "crons": [
+    { "path": "/api/cron/ping", "schedule": "*/4 * * * *" }
+  ]
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3: RATE LIMITING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/rateLimit.ts
+
+const LIMITS = {
+  nano: { daily: 200, hourly: 30 },
+  prime: { daily: 1000, hourly: 100 },
+  apex: { daily: 999999, hourly: 999999 },
+  agent: { daily: 999999, hourly: 999999 }
+}
+
+export async function checkRateLimit(userId: string, plan: string): Promise<{
+  allowed: boolean
+  remaining: number
+  resetAt: number
+}> {
+  const limit = LIMITS[plan as keyof typeof LIMITS] || LIMITS.nano
+  const dayKey = `rl:${userId}:${plan}:${new Date().toISOString().slice(0,10)}`
+  const hourKey = `rl:${userId}:${plan}:${new Date().toISOString().slice(0,13)}`
+
+  const [dayCount, hourCount] = await Promise.all([
+    redis.incr(dayKey),
+    redis.incr(hourKey)
+  ])
+
+  if (dayCount === 1) await redis.expire(dayKey, 86400)
+  if (hourCount === 1) await redis.expire(hourKey, 3600)
+
+  const allowed = dayCount <= limit.daily && hourCount <= limit.hourly
+  const remaining = Math.max(0, limit.daily - dayCount)
+  const resetAt = new Date().setHours(24, 0, 0, 0)
+
+  return { allowed, remaining, resetAt }
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4: INTENT DETECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/intent.ts
+
+export interface Intent {
+  isImageGen: boolean
+  isSearch: boolean
+  isAppFactory: boolean
+  isAgentTask: boolean
+  isCodeRun: boolean
+  isImageAnalysis: boolean
+  isVoice: boolean
+  isCompare: boolean
+  imagePrompt: string
+  searchQuery: string
+  appDescription: string
+}
+
+export function detectIntent(message: string): Intent {
+  const m = message.toLowerCase()
+
+  const imageGenWords = /(generate|create|draw|make|show|design|paint)\s.*(image|photo|picture|logo|illustration|art|poster|banner|avatar)/
+  const searchWords = /\b(today|latest|news|current|2024|2025|2026|yesterday|just announced|recently|live|now|trending|stock price|weather)\b/
+  const appWords = /(build|create|make|generate|code)\s.*(app|website|tool|dashboard|landing page|portfolio|saas|game|calculator|timer)/
+  const agentWords = /(take over|do my work|handle|automate|control|run|manage|complete my|work for me|i need you to do|finish my)/
+  const codeRunWords = /(run|execute|test|compile|debug)\s.*(this|the|my)?\s*(code|script|function|program)/
+  const visionWords = /(what('s| is) in|analyze|describe|read|ocr|extract text from|look at)\s.*(this|the)?\s*(image|photo|picture|screenshot)/
+  const compareWords = /\b(compare|vs|versus|which is better|benchmark)\b/
+
+  const isImageGen = imageGenWords.test(m)
+  const isSearch = searchWords.test(m)
+  const isAppFactory = appWords.test(m)
+  const isAgentTask = agentWords.test(m)
+  const isCodeRun = codeRunWords.test(m)
+  const isImageAnalysis = visionWords.test(m)
+  const isCompare = compareWords.test(m)
+  const isVoice = /\b(read (aloud|out|to me)|speak|say this|voice)\b/.test(m)
+
+  // Extract clean prompts
+  const imagePrompt = isImageGen
+    ? message.replace(/generate|create|draw|make|show|an?|the/gi, "").trim()
+    : ""
+  const searchQuery = isSearch ? message : ""
+  const appDescription = isAppFactory
+    ? message.replace(/build|create|make|generate|code|me|an?|a/gi, "").trim()
+    : ""
+
+  return {
+    isImageGen, isSearch, isAppFactory, isAgentTask,
+    isCodeRun, isImageAnalysis, isVoice, isCompare,
+    imagePrompt, searchQuery, appDescription
+  }
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5: MAIN CHAT ROUTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /app/api/chat/route.ts
+
+import { streamWithFallback } from "@/lib/providers/router"
+import { detectIntent } from "@/lib/intent"
+import { checkRateLimit } from "@/lib/rateLimit"
+import { getMemories, extractMemoriesBackground } from "@/lib/memory"
+import { search } from "@/lib/search"
+import { generateImage } from "@/lib/imageGen"
+
+export const runtime = "edge"
+
+export async function POST(req: Request) {
+  const { messages, tier, userId, sessionId, plan } = await req.json()
+
+  // Rate limit check
+  const rl = await checkRateLimit(userId, plan || "nano")
+  if (!rl.allowed) {
+    return Response.json({
+      error: "Daily limit reached",
+      resetAt: rl.resetAt,
+      upgrade: true
+    }, { status: 429 })
+  }
+
+  const lastMessage = messages[messages.length - 1]?.content as string
+  const intent = detectIntent(lastMessage)
+
+  // Handle image generation
+  if (intent.isImageGen) {
+    const result = await generateImage(intent.imagePrompt || lastMessage)
+    return Response.json({ type: "image", url: result.url, provider: result.provider })
+  }
+
+  // Get memories for context
+  const memories = userId ? await getMemories(userId, lastMessage) : []
+  const memoryContext = memories.length > 0
+    ? `User context (remember these facts): ${memories.join(". ")}.`
+    : ""
+
+  // Get search results if needed
+  let searchContext = ""
+  let searchResults: any[] = []
+  if (intent.isSearch) {
+    searchResults = await search(intent.searchQuery || lastMessage)
+    if (searchResults.length > 0) {
+      searchContext = `\n\nCurrent information from web:\n${
+        searchResults.map(r => `- ${r.title}: ${r.snippet} (${r.url})`).join("\n")
+      }\nUse this information in your response.`
+    }
+  }
+
+  const systemPrompt = [
+    "You are Zero, a helpful and friendly AI assistant.",
+    memoryContext,
+    searchContext
+  ].filter(Boolean).join("\n")
+
+  // Stream AI response
+  const stream = await streamWithFallback(messages, tier || "nano", systemPrompt)
+
+  // Background: extract memories after response
+  if (userId && messages.length >= 2) {
+    extractMemoriesBackground(messages.slice(-3), userId)
+  }
+
+  // Return SSE stream with search sources appended
+  const headers = {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "X-Search-Results": searchResults.length > 0 ? JSON.stringify(searchResults) : ""
+  }
+
+  return new Response(stream, { headers })
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6: MEMORY SYSTEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/memory.ts
+
+import { createClient } from "@supabase/supabase-js"
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
+)
+
+async function getEmbedding(text: string): Promise<number[]> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${process.env.GEMINI_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "models/text-embedding-004",
+        content: { parts: [{ text }] }
+      })
+    }
+  )
+  const data = await res.json()
+  return data.embedding?.values || []
+}
+
+export async function getMemories(userId: string, query: string): Promise<string[]> {
+  try {
+    const embedding = await getEmbedding(query)
+    const { data } = await supabase.rpc("match_memories", {
+      query_embedding: embedding,
+      match_user_id: userId,
+      match_count: 20
+    })
+    return data?.map((r: any) => r.fact) || []
+  } catch { return [] }
+}
+
+export async function extractMemoriesBackground(messages: any[], userId: string) {
+  // Fire and forget — don't await
+  extractMemories(messages, userId).catch(console.error)
+}
+
+async function extractMemories(messages: any[], userId: string) {
+  const conversation = messages
+    .map(m => `${m.role}: ${m.content}`)
+    .join("\n")
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `Extract 3-5 specific facts about the USER (not the AI) from this conversation.
+Return ONLY a valid JSON array of short strings. No markdown. No explanation.
+Example: ["Works as a developer", "Lives in Mumbai", "Prefers dark mode"]
+
+Conversation:
+${conversation}`
+          }]
+        }],
+        generationConfig: { maxOutputTokens: 256 }
+      })
+    }
+  )
+
+  const data = await res.json()
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]"
+  
+  let facts: string[] = []
+  try { facts = JSON.parse(text.replace(/```json|```/g, "").trim()) } catch { return }
+
+  for (const fact of facts) {
+    const embedding = await getEmbedding(fact)
+    await supabase.from("user_memories").insert({
+      user_id: userId,
+      fact,
+      embedding: JSON.stringify(embedding)
+    })
+  }
+}
+
+// Supabase RPC function — add to migration:
+// CREATE OR REPLACE FUNCTION match_memories(
+//   query_embedding vector(768),
+//   match_user_id UUID,
+//   match_count INT
+// ) RETURNS TABLE(fact TEXT, similarity FLOAT)
+// LANGUAGE SQL AS $$
+//   SELECT fact, 1 - (embedding <=> query_embedding) AS similarity
+//   FROM user_memories
+//   WHERE user_id = match_user_id
+//   ORDER BY embedding <=> query_embedding
+//   LIMIT match_count;
+// $$;
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7: SEARCH SYSTEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/search.ts
+
+export interface SearchResult {
+  title: string
+  url: string
+  snippet: string
+  favicon: string
+}
+
+async function serperSearch(query: string): Promise<SearchResult[]> {
+  const res = await fetch("https://google.serper.dev/search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": process.env.SERPER_KEY!
+    },
+    body: JSON.stringify({ q: query, num: 5 }),
+    signal: AbortSignal.timeout(5000)
+  })
+  if (!res.ok) throw new Error("Serper failed")
+  const data = await res.json()
+  return (data.organic || []).map((r: any) => ({
+    title: r.title,
+    url: r.link,
+    snippet: r.snippet,
+    favicon: `https://www.google.com/s2/favicons?domain=${new URL(r.link).hostname}`
+  }))
+}
+
+async function braveSearch(query: string): Promise<SearchResult[]> {
+  const res = await fetch(
+    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`,
+    {
+      headers: {
+        "Accept": "application/json",
+        "X-Subscription-Token": process.env.BRAVE_KEY!
+      },
+      signal: AbortSignal.timeout(5000)
+    }
+  )
+  if (!res.ok) throw new Error("Brave failed")
+  const data = await res.json()
+  return (data.web?.results || []).map((r: any) => ({
+    title: r.title,
+    url: r.url,
+    snippet: r.description,
+    favicon: `https://www.google.com/s2/favicons?domain=${new URL(r.url).hostname}`
+  }))
+}
+
+async function tavilySearch(query: string): Promise<SearchResult[]> {
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: process.env.TAVILY_KEY, query, max_results: 5 }),
+    signal: AbortSignal.timeout(5000)
+  })
+  if (!res.ok) throw new Error("Tavily failed")
+  const data = await res.json()
+  return (data.results || []).map((r: any) => ({
+    title: r.title,
+    url: r.url,
+    snippet: r.content?.slice(0, 200),
+    favicon: `https://www.google.com/s2/favicons?domain=${new URL(r.url).hostname}`
+  }))
+}
+
+async function ddgSearch(query: string): Promise<SearchResult[]> {
+  const res = await fetch(
+    `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+    { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) }
+  )
+  const html = await res.text()
+  const results: SearchResult[] = []
+  const regex = /<a class="result__a" href="([^"]+)"[^>]*>([^<]+)<\/a>[\s\S]*?<a class="result__snippet"[^>]*>([^<]+)<\/a>/g
+  let match
+  while ((match = regex.exec(html)) !== null && results.length < 5) {
+    results.push({ url: match[1], title: match[2], snippet: match[3], favicon: "" })
+  }
+  return results
+}
+
+export async function search(query: string): Promise<SearchResult[]> {
+  // Check cache
+  const cacheKey = `search:${Buffer.from(query).toString("base64").slice(0,32)}`
+  const cached = await redis.get(cacheKey)
+  if (cached) return JSON.parse(cached as string)
+
+  const providers = [serperSearch, braveSearch, tavilySearch, ddgSearch]
+  for (const provider of providers) {
+    try {
+      const results = await provider(query)
+      if (results.length > 0) {
+        await redis.set(cacheKey, JSON.stringify(results), { ex: 3600 })
+        return results
+      }
+    } catch (e) { continue }
+  }
+  return []
+}
+
+File: /app/api/search/route.ts
+export async function POST(req: Request) {
+  const { query } = await req.json()
+  const results = await search(query)
+  return Response.json({ results })
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8: IMAGE GENERATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/imageGen.ts
+
+export async function generateImage(prompt: string): Promise<{url: string, provider: string}> {
+  const encoded = encodeURIComponent(prompt)
+  const seed = Math.floor(Math.random() * 99999)
+
+  // Primary: Pollinations (no key, best free option, handles 2000+ users)
+  const pollinationsUrl = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`
+  
+  try {
+    const check = await fetch(pollinationsUrl, {
+      method: "HEAD",
+      signal: AbortSignal.timeout(15000)
+    })
+    if (check.ok) return { url: pollinationsUrl, provider: "pollinations" }
+  } catch {}
+
+  // Fallback 1: Stable Horde (free, community GPUs)
+  try {
+    const genRes = await fetch("https://stablehorde.net/api/v2/generate/async", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": process.env.STABLE_HORDE_KEY || "0000000000"
+      },
+      body: JSON.stringify({
+        prompt,
+        params: { width: 512, height: 512, steps: 20, sampler_name: "k_euler" },
+        models: ["Deliberate"],
+        r2: true
+      })
+    })
+    const { id } = await genRes.json()
+    // Poll for completion
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 3000))
+      const checkRes = await fetch(`https://stablehorde.net/api/v2/generate/status/${id}`)
+      const status = await checkRes.json()
+      if (status.done && status.generations?.[0]?.img) {
+        return { url: status.generations[0].img, provider: "stable-horde" }
+      }
+    }
+  } catch {}
+
+  // Fallback 2: HF FLUX Schnell
+  try {
+    const hfRes = await fetch(
+      "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.HF_TOKEN_1}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ inputs: prompt }),
+        signal: AbortSignal.timeout(30000)
+      }
+    )
+    if (hfRes.ok) {
+      const blob = await hfRes.blob()
+      const buffer = await blob.arrayBuffer()
+      const base64 = Buffer.from(buffer).toString("base64")
+      return {
+        url: `data:image/jpeg;base64,${base64}`,
+        provider: "hf-flux"
+      }
+    }
+  } catch {}
+
+  // Final fallback: Craiyon (no key)
+  return {
+    url: `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&seed=${seed}`,
+    provider: "pollinations-fallback"
+  }
+}
+
+File: /app/api/image/route.ts
+export async function POST(req: Request) {
+  const { prompt } = await req.json()
+  const result = await generateImage(prompt)
+  return Response.json(result)
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9: APP FACTORY — TEMPLATE ARCHITECTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/appFactory/templates.ts
+
+// Small base templates (~80-100 lines each) that AI modifies
+// NOT full apps — scaffolds that get transformed
+
+export const TEMPLATES: Record<string, {
+  files: Record<string, string>
+  description: string
+  category: string
+}> = {
+  landing: {
+    description: "Marketing/landing page",
+    category: "web",
+    files: {
+      "index.html": `<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>App</title><link rel="stylesheet" href="styles.css">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+</head><body>
+<nav class="nav"><div class="nav-brand">Brand</div>
+<div class="nav-links"><a href="#features">Features</a><a href="#pricing">Pricing</a>
+<button class="btn-primary">Get Started</button></div></nav>
+<section class="hero"><h1>Headline Goes Here</h1><p>Subheadline</p>
+<button class="btn-hero">Start Free →</button></section>
+<section class="features" id="features">
+<div class="feature-grid">
+<div class="feature-card"><i class="fas fa-bolt"></i><h3>Feature 1</h3><p>Description</p></div>
+<div class="feature-card"><i class="fas fa-shield"></i><h3>Feature 2</h3><p>Description</p></div>
+<div class="feature-card"><i class="fas fa-chart-line"></i><h3>Feature 3</h3><p>Description</p></div>
+</div></section>
+<section class="pricing" id="pricing">
+<div class="price-cards">
+<div class="price-card"><h3>Free</h3><p class="price">$0</p><button>Start Free</button></div>
+<div class="price-card featured"><h3>Pro</h3><p class="price">$19/mo</p><button>Get Pro</button></div>
+</div></section>
+<footer><p>© 2025 Brand. All rights reserved.</p></footer>
+<script src="script.js"></script></body></html>`,
+
+      "styles.css": `:root{--primary:#6366f1;--bg:#0a0a0f;--card:#1a1a2e;--text:#e2e8f0;--muted:#94a3b8}
+*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif}
+.nav{display:flex;justify-content:space-between;align-items:center;padding:1.5rem 5%;position:fixed;width:100%;z-index:100;backdrop-filter:blur(10px);background:rgba(10,10,15,0.8);border-bottom:1px solid rgba(255,255,255,0.05)}
+.btn-primary{background:var(--primary);color:white;border:none;padding:0.6rem 1.5rem;border-radius:8px;cursor:pointer;font-weight:600}
+.hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem;background:radial-gradient(ellipse at center,rgba(99,102,241,0.15) 0%,transparent 70%)}
+.hero h1{font-size:clamp(2.5rem,8vw,5rem);font-weight:800;line-height:1.1;margin-bottom:1.5rem}
+.btn-hero{background:var(--primary);color:white;border:none;padding:1rem 2.5rem;border-radius:12px;font-size:1.1rem;cursor:pointer;margin-top:2rem;transition:transform 0.2s}
+.btn-hero:hover{transform:translateY(-2px)}
+.features{padding:6rem 5%}.feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.5rem}
+.feature-card{background:var(--card);padding:2rem;border-radius:16px;border:1px solid rgba(255,255,255,0.05);transition:transform 0.2s}
+.feature-card:hover{transform:translateY(-4px)}.feature-card i{font-size:2rem;color:var(--primary);margin-bottom:1rem}
+.pricing{padding:6rem 5%;text-align:center}.price-cards{display:flex;gap:1.5rem;justify-content:center;flex-wrap:wrap;margin-top:3rem}
+.price-card{background:var(--card);padding:2.5rem;border-radius:16px;min-width:240px;border:1px solid rgba(255,255,255,0.05)}
+.price-card.featured{border-color:var(--primary);transform:scale(1.05)}.price{font-size:2.5rem;font-weight:800;color:var(--primary)}
+footer{text-align:center;padding:3rem;color:var(--muted);border-top:1px solid rgba(255,255,255,0.05)}`,
+
+      "script.js": `// Smooth scroll
+document.querySelectorAll('a[href^="#"]').forEach(a=>{
+  a.addEventListener('click',e=>{e.preventDefault();document.querySelector(a.getAttribute('href')).scrollIntoView({behavior:'smooth'})})
+})
+// Scroll animations
+const observer=new IntersectionObserver(entries=>{
+  entries.forEach(e=>{if(e.isIntersecting)e.target.style.opacity=1,e.target.style.transform='translateY(0)'})
+},{threshold:0.1})
+document.querySelectorAll('.feature-card,.price-card').forEach(el=>{
+  el.style.opacity=0;el.style.transform='translateY(20px)';el.style.transition='opacity 0.5s,transform 0.5s';
+  observer.observe(el)
+})`
+    }
+  },
+
+  dashboard: {
+    description: "Admin dashboard with sidebar",
+    category: "web",
+    files: {
+      "index.html": `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Dashboard</title><link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script></head><body>
+<div class="layout"><aside class="sidebar">
+<div class="logo">Dashboard</div>
+<nav><a class="nav-item active" href="#"><span>📊</span> Overview</a>
+<a class="nav-item" href="#"><span>📈</span> Analytics</a>
+<a class="nav-item" href="#"><span>👥</span> Users</a>
+<a class="nav-item" href="#"><span>⚙️</span> Settings</a></nav></aside>
+<main class="main"><header class="topbar"><h1 class="page-title">Overview</h1>
+<div class="user-info"><span>Admin</span><div class="avatar">A</div></div></header>
+<div class="stats-grid">
+<div class="stat-card"><p class="stat-label">Total Users</p><p class="stat-value">12,543</p><p class="stat-change positive">+12.5%</p></div>
+<div class="stat-card"><p class="stat-label">Revenue</p><p class="stat-value">$48,293</p><p class="stat-change positive">+8.2%</p></div>
+<div class="stat-card"><p class="stat-label">Active Now</p><p class="stat-value">1,892</p><p class="stat-change negative">-2.1%</p></div>
+<div class="stat-card"><p class="stat-label">Conversion</p><p class="stat-value">3.24%</p><p class="stat-change positive">+0.8%</p></div></div>
+<div class="chart-container"><canvas id="chart"></canvas></div></main></div>
+<script src="script.js"></script></body></html>`,
+
+      "styles.css": `:root{--primary:#6366f1;--bg:#0f0f1a;--sidebar:#1a1a2e;--card:#1e1e35;--text:#e2e8f0;--muted:#64748b;--border:rgba(255,255,255,0.06)}
+*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif}
+.layout{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+.sidebar{background:var(--sidebar);padding:1.5rem;border-right:1px solid var(--border)}
+.logo{font-weight:800;font-size:1.2rem;color:var(--primary);margin-bottom:2rem}
+.nav-item{display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border-radius:10px;color:var(--muted);text-decoration:none;margin-bottom:0.25rem;transition:all 0.2s}
+.nav-item:hover,.nav-item.active{background:rgba(99,102,241,0.1);color:var(--text)}
+.main{padding:1.5rem}.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:2rem}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem}
+.stat-card{background:var(--card);padding:1.5rem;border-radius:14px;border:1px solid var(--border)}
+.stat-label{color:var(--muted);font-size:0.85rem;margin-bottom:0.5rem}.stat-value{font-size:2rem;font-weight:700}
+.stat-change{font-size:0.8rem;margin-top:0.25rem}.positive{color:#10b981}.negative{color:#ef4444}
+.chart-container{background:var(--card);padding:1.5rem;border-radius:14px;border:1px solid var(--border)}
+.avatar{width:36px;height:36px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;font-weight:700}`,
+
+      "script.js": `const ctx=document.getElementById('chart').getContext('2d');
+new Chart(ctx,{type:'line',data:{labels:['Jan','Feb','Mar','Apr','May','Jun','Jul'],
+datasets:[{label:'Revenue',data:[4200,5800,4900,7200,8100,7600,9200],
+borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,0.1)',tension:0.4,fill:true}]},
+options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b'}},x:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b'}}}}})`
+    }
+  },
+
+  tool: {
+    description: "Single-page utility tool",
+    category: "app",
+    files: {
+      "index.html": `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tool</title><link rel="stylesheet" href="styles.css"></head><body>
+<div class="app"><header><h1>Tool Name</h1><p class="subtitle">What this tool does</p></header>
+<main><div class="input-area"><textarea id="input" placeholder="Enter input here..."></textarea>
+<div class="controls"><button id="run-btn" class="btn-primary">Run →</button>
+<button id="clear-btn" class="btn-secondary">Clear</button></div></div>
+<div class="output-area"><div id="output" class="output-box">Output will appear here...</div>
+<button id="copy-btn" class="btn-copy">📋 Copy</button></div></main></div>
+<script src="script.js"></script></body></html>`,
+
+      "styles.css": `:root{--primary:#6366f1;--bg:#0a0a0f;--card:#1a1a2e;--text:#e2e8f0;--border:rgba(255,255,255,0.08)}
+*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.app{width:min(800px,95%)}header{text-align:center;margin-bottom:2rem}h1{font-size:2rem;font-weight:800;color:var(--text)}.subtitle{color:#64748b;margin-top:0.5rem}
+textarea{width:100%;height:180px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:1rem;font-size:1rem;resize:vertical;font-family:inherit}
+.controls{display:flex;gap:1rem;margin-top:1rem}.btn-primary{background:var(--primary);color:white;border:none;padding:0.75rem 2rem;border-radius:10px;font-size:1rem;cursor:pointer;font-weight:600}
+.btn-secondary{background:transparent;color:#64748b;border:1px solid var(--border);padding:0.75rem 1.5rem;border-radius:10px;cursor:pointer}
+.output-area{margin-top:1.5rem;position:relative}.output-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.5rem;min-height:150px;white-space:pre-wrap;line-height:1.7}
+.btn-copy{position:absolute;top:1rem;right:1rem;background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text);padding:0.4rem 0.75rem;border-radius:8px;cursor:pointer;font-size:0.85rem}`,
+
+      "script.js": `document.getElementById('run-btn').addEventListener('click',()=>{
+  const input=document.getElementById('input').value.trim();
+  if(!input)return;
+  // Tool logic here — this gets replaced by AI
+  document.getElementById('output').textContent='Processing: '+input;
+})
+document.getElementById('clear-btn').addEventListener('click',()=>{
+  document.getElementById('input').value='';
+  document.getElementById('output').textContent='Output will appear here...';
+})
+document.getElementById('copy-btn').addEventListener('click',()=>{
+  navigator.clipboard.writeText(document.getElementById('output').textContent);
+})`
+    }
+  },
+
+  game: {
+    description: "Browser game with canvas",
+    category: "game",
+    files: {
+      "index.html": `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Game</title><link rel="stylesheet" href="styles.css"></head><body>
+<div class="game-wrapper"><div class="hud"><span>Score: <b id="score">0</b></span>
+<button id="start-btn">Start Game</button><span>Best: <b id="best">0</b></span></div>
+<canvas id="game" width="600" height="400"></canvas>
+<div id="game-over" class="game-over hidden"><h2>Game Over!</h2><p>Score: <span id="final-score">0</span></p>
+<button onclick="startGame()">Play Again</button></div></div>
+<script src="script.js"></script></body></html>`,
+
+      "styles.css": `body{background:#0a0a0f;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;font-family:'Inter',sans-serif;color:#e2e8f0}
+.game-wrapper{text-align:center}canvas{border:2px solid rgba(99,102,241,0.3);border-radius:12px;background:#1a1a2e}
+.hud{display:flex;justify-content:space-between;align-items:center;padding:1rem;max-width:600px;margin:0 auto}
+button{background:#6366f1;color:white;border:none;padding:0.6rem 1.5rem;border-radius:8px;cursor:pointer;font-weight:600}
+.game-over{position:absolute;background:rgba(10,10,15,0.95);padding:2rem;border-radius:16px;border:1px solid rgba(99,102,241,0.3)}
+.hidden{display:none}`,
+
+      "script.js": `// Base game loop — AI replaces with actual game logic
+const canvas=document.getElementById('game');const ctx=canvas.getContext('2d');
+let score=0,best=0,running=false,animId;
+function draw(){ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle='#6366f1';ctx.fillRect(280,180,40,40);
+  ctx.fillStyle='#e2e8f0';ctx.font='20px Inter';ctx.fillText('Game content here',180,200)}
+function startGame(){score=0;running=true;document.getElementById('game-over').classList.add('hidden');loop()}
+function loop(){if(!running)return;draw();animId=requestAnimationFrame(loop)}
+function endGame(){running=false;cancelAnimationFrame(animId);
+  if(score>best){best=score;document.getElementById('best').textContent=best}
+  document.getElementById('final-score').textContent=score;
+  document.getElementById('game-over').classList.remove('hidden')}
+document.getElementById('start-btn').addEventListener('click',startGame);draw()`
+    }
+  }
+}
+
+export type TemplateKey = keyof typeof TEMPLATES
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/appFactory/index.ts
+
+import { TEMPLATES, TemplateKey } from "./templates"
+import { streamWithFallback } from "@/lib/providers/router"
+
+async function classifyTemplate(description: string): Promise<TemplateKey> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `Which template fits this request? Reply with ONLY one word from this list:
+landing, dashboard, tool, game
+
+Request: "${description}"
+Answer:`
+          }]
+        }],
+        generationConfig: { maxOutputTokens: 10 }
+      })
+    }
+  )
+  const data = await res.json()
+  const answer = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toLowerCase()
+  const valid: TemplateKey[] = ["landing", "dashboard", "tool", "game"]
+  return valid.includes(answer as TemplateKey) ? answer as TemplateKey : "landing"
+}
+
+async function customizeFile(
+  filename: string,
+  baseContent: string,
+  description: string
+): Promise<{ filename: string; content: string }> {
+
+  const isCSS = filename.endsWith(".css")
+  const isJS = filename.endsWith(".js")
+  const isHTML = filename.endsWith(".html")
+
+  const instructions = isHTML
+    ? "Update content, copy, headings, and structure to match the description. Keep all HTML structure and script/style links."
+    : isCSS
+    ? "Update colors, gradients, and theme to match the app's purpose. Make it visually stunning with modern effects."
+    : "Implement real working functionality for this specific app. Replace placeholder logic with actual working code."
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `You are customizing a ${filename} file for this app: "${description}"
+
+Instructions: ${instructions}
+Return ONLY the raw file content. No markdown. No backticks. No explanation.
+
+Base file to modify:
+${baseContent}`
+          }]
+        }],
+        generationConfig: { maxOutputTokens: 2048 }
+      })
+    }
+  )
+  const data = await res.json()
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text
+    ?.replace(/^```[a-z]*\n?/gm, "")
+    ?.replace(/```$/gm, "")
+    ?.trim() || baseContent
+
+  return { filename, content }
+}
+
+function buildStackBlitzUrl(files: { filename: string; content: string }[]): string {
+  const fileObj: Record<string, string> = {}
+  files.forEach(f => { fileObj[f.filename] = f.content })
+  const encoded = Buffer.from(JSON.stringify(fileObj)).toString("base64")
+  return `https://stackblitz.com/run?view=preview&title=Zero+App&files=${encodeURIComponent(encoded)}`
+}
+
+export async function buildApp(description: string): Promise<{
+  files: { filename: string; content: string }[]
+  stackblitzUrl: string
+  template: string
+}> {
+  const templateKey = await classifyTemplate(description)
+  const template = TEMPLATES[templateKey]
+
+  // Customize all files in parallel
+  const customizedFiles = await Promise.all(
+    Object.entries(template.files).map(([filename, baseContent]) =>
+      customizeFile(filename, baseContent, description)
+    )
+  )
+
+  const stackblitzUrl = buildStackBlitzUrl(customizedFiles)
+
+  return {
+    files: customizedFiles,
+    stackblitzUrl,
+    template: templateKey
+  }
+}
+
+File: /app/api/appfactory/route.ts
+
+import { buildApp } from "@/lib/appFactory"
+export async function POST(req: Request) {
+  const { description, tier } = await req.json()
+  if (!description) return Response.json({ error: "No description" }, { status: 400 })
+  const result = await buildApp(description)
+  return Response.json(result)
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10: COMPARE (ZERO VS X)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /app/api/compare/route.ts
+
+export const runtime = "edge"
+
+export async function POST(req: Request) {
+  const { prompt, userId } = await req.json()
+
+  const models = [
+    {
+      name: "Zero Prime (Qwen 7B)",
+      endpoint: "https://api.siliconflow.cn/v1/chat/completions",
+      apiKey: process.env.SILICONFLOW_KEY_1!,
+      model: "Qwen/Qwen2.5-7B-Instruct"
+    },
+    {
+      name: "Zero Apex (Qwen 72B)",
+      endpoint: "https://api.fireworks.ai/inference/v1/chat/completions",
+      apiKey: process.env.FIREWORKS_KEY!,
+      model: "accounts/fireworks/models/qwen2p5-72b-instruct"
+    },
+    {
+      name: "Gemini Flash",
+      endpoint: `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_KEY}`,
+      apiKey: process.env.GEMINI_KEY!,
+      model: "gemini-1.5-flash"
+    }
+  ]
+
+  const results = await Promise.allSettled(
+    models.map(async model => {
+      const isGemini = model.endpoint.includes("googleapis")
+      const body = isGemini
+        ? { contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 1024 } }
+        : { model: model.model, messages: [{ role: "user", content: prompt }], max_tokens: 1024 }
+
+      const res = await fetch(model.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(!isGemini && { "Authorization": `Bearer ${model.apiKey}` })
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20000)
+      })
+      const data = await res.json()
+      const text = isGemini
+        ? data.candidates?.[0]?.content?.parts?.[0]?.text
+        : data.choices?.[0]?.message?.content
+      return { name: model.name, response: text || "No response", success: true }
+    })
+  )
+
+  const responses = results.map((r, i) =>
+    r.status === "fulfilled"
+      ? r.value
+      : { name: models[i].name, response: "Failed to respond", success: false }
+  )
+
+  return Response.json({ responses })
+}
+
+File: /app/api/compare/vote/route.ts
+
+export async function POST(req: Request) {
+  const { promptHash, winner, modelA, modelB, modelC, userId } = await req.json()
+  const { createClient } = await import("@supabase/supabase-js")
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_KEY!
+  )
+  await supabase.from("comparison_votes").insert({
+    user_id: userId,
+    prompt_hash: promptHash,
+    winner,
+    model_a: modelA,
+    model_b: modelB,
+    model_c: modelC
+  })
+  return Response.json({ saved: true })
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 11: AGENTIC CEO MODE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/agent/types.ts
+
+export interface AgentTask {
+  id: string
+  description: string
+  tool: "search" | "code" | "write" | "image" | "browse" | "vision" | "automate"
+  priority: 1 | 2 | 3
+  input: string
+  dependsOn: string[]
+  status: "pending" | "running" | "done" | "failed"
+  result?: string
+}
+
+export interface AgentPlan {
+  goal: string
+  tasks: AgentTask[]
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/agent/orchestrator.ts
+
+import { search } from "@/lib/search"
+import { generateImage } from "@/lib/imageGen"
+import { AgentTask, AgentPlan } from "./types"
+
+const ORCHESTRATOR_PROMPT = `You are Zero's AI orchestrator — the CEO's brain.
+Break the user's goal into parallel executable tasks.
+Return ONLY valid JSON, no markdown, no explanation:
+{
+  "goal": "one sentence summary",
+  "tasks": [
+    {
+      "id": "t1",
+      "description": "what to do",
+      "tool": "search|code|write|image|browse|vision|automate",
+      "priority": 1,
+      "input": "specific input for the tool",
+      "dependsOn": []
+    }
+  ]
+}
+
+Tool capabilities:
+- search: web search for information
+- code: execute Python/JS code in sandbox
+- write: generate text, reports, emails, content
+- image: generate images
+- browse: visit a URL and extract content
+- vision: analyze an image or screenshot
+- automate: trigger n8n workflow webhook`
+
+async function createPlan(goal: string): Promise<AgentPlan> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: `${ORCHESTRATOR_PROMPT}\n\nUser goal: "${goal}"` }] }],
+        generationConfig: { maxOutputTokens: 1024 }
+      })
+    }
+  )
+  const data = await res.json()
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}"
+  try {
+    return JSON.parse(text.replace(/```json|```/g, "").trim())
+  } catch {
+    return { goal, tasks: [{ id: "t1", description: goal, tool: "write", priority: 1, input: goal, dependsOn: [], status: "pending" }] }
+  }
+}
+
+async function executeTask(task: AgentTask): Promise<string> {
+  switch (task.tool) {
+    case "search": {
+      const results = await search(task.input)
+      return results.map(r => `${r.title}: ${r.snippet}`).join("\n")
+    }
+    case "code": {
+      const res = await fetch("https://api.e2b.dev/sandboxes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": process.env.E2B_KEY!
+        },
+        body: JSON.stringify({
+          template: "base",
+          timeout: 30
+        })
+      })
+      const sandbox = await res.json()
+      const runRes = await fetch(`https://api.e2b.dev/sandboxes/${sandbox.sandboxId}/run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": process.env.E2B_KEY!
+        },
+        body: JSON.stringify({ code: task.input, language: "python" })
+      })
+      const runData = await runRes.json()
+      return runData.stdout || runData.stderr || "Code executed"
+    }
+    case "write": {
+      const res = await fetch("https://api.siliconflow.cn/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.SILICONFLOW_KEY_1}`
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen2.5-7B-Instruct",
+          messages: [{ role: "user", content: task.input }],
+          max_tokens: 1024
+        })
+      })
+      const data = await res.json()
+      return data.choices?.[0]?.message?.content || ""
+    }
+    case "image": {
+      const result = await generateImage(task.input)
+      return result.url
+    }
+    case "browse": {
+      const res = await fetch(`https://r.jina.ai/${task.input}`, {
+        headers: { "Accept": "text/plain" },
+        signal: AbortSignal.timeout(15000)
+      })
+      const text = await res.text()
+      return text.slice(0, 3000)
+    }
+    case "vision": {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: task.input }] }],
+            generationConfig: { maxOutputTokens: 1024 }
+          })
+        }
+      )
+      const data = await res.json()
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || ""
+    }
+    case "automate": {
+      if (!process.env.N8N_WEBHOOK_URL) return "Automation webhook not configured"
+      const res = await fetch(process.env.N8N_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task: task.input, description: task.description })
+      })
+      return res.ok ? "Automation triggered successfully" : "Automation failed"
+    }
+    default:
+      return "Unknown tool"
+  }
+}
+
+async function synthesize(goal: string, results: Record<string, string>): Promise<string> {
+  const context = Object.entries(results)
+    .map(([id, result]) => `Task ${id} result: ${result}`)
+    .join("\n\n")
+
+  const res = await fetch("https://api.fireworks.ai/inference/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${process.env.FIREWORKS_KEY}`
+    },
+    body: JSON.stringify({
+      model: "accounts/fireworks/models/qwen2p5-72b-instruct",
+      messages: [
+        {
+          role: "system",
+          content: "You are Zero AI. Synthesize the task results into a clear, comprehensive response for the user."
+        },
+        {
+          role: "user",
+          content: `Original goal: ${goal}\n\nTask results:\n${context}\n\nProvide a complete, helpful response:`
+        }
+      ],
+      max_tokens: 2048,
+      stream: false
+    })
+  })
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content || "Task completed."
+}
+
+export async function* runAgent(goal: string): AsyncGenerator<{
+  type: "plan" | "worker_start" | "worker_done" | "synthesis" | "done"
+  data: any
+}> {
+  // Step 1: Create plan
+  const plan = await createPlan(goal)
+  yield { type: "plan", data: plan }
+
+  // Step 2: Execute tasks respecting dependencies
+  const results: Record<string, string> = {}
+  const pending = [...plan.tasks]
+
+  while (pending.length > 0) {
+    // Find tasks whose dependencies are all satisfied
+    const ready = pending.filter(t =>
+      t.dependsOn.every(dep => dep in results)
+    )
+    if (ready.length === 0) break
+
+    // Execute ready tasks in parallel
+    yield { type: "worker_start", data: { tasks: ready.map(t => t.id) } }
+
+    const taskResults = await Promise.allSettled(
+      ready.map(async task => {
+        const result = await executeTask(task)
+        return { id: task.id, result }
+      })
+    )
+
+    for (const r of taskResults) {
+      if (r.status === "fulfilled") {
+        results[r.value.id] = r.value.result
+        yield { type: "worker_done", data: { taskId: r.value.id, result: r.value.result.slice(0, 200) } }
+      }
+    }
+
+    // Remove completed tasks from pending
+    ready.forEach(t => {
+      const idx = pending.findIndex(p => p.id === t.id)
+      if (idx > -1) pending.splice(idx, 1)
+    })
+  }
+
+  // Step 3: Synthesize
+  const finalResponse = await synthesize(goal, results)
+  yield { type: "synthesis", data: finalResponse }
+  yield { type: "done", data: null }
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /app/api/agent/route.ts
+
+import { runAgent } from "@/lib/agent/orchestrator"
+export const runtime = "edge"
+
+export async function POST(req: Request) {
+  const { message, userId, plan } = await req.json()
+
+  if (plan !== "agent") {
+    return Response.json({ error: "Agent mode requires Agent plan", upgrade: true }, { status: 403 })
+  }
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encode = (data: any) =>
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`))
+      try {
+        for await (const event of runAgent(message)) {
+          encode(event)
+        }
+      } catch (e: any) {
+        encode({ type: "error", data: e.message })
+      }
+      controller.close()
+    }
+  })
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache"
+    }
+  })
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 12: WEBLLM HOOK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /hooks/useNano.ts
+"use client"
+
+import { useState, useEffect } from "react"
+
+type NanoStatus = "unavailable" | "checking" | "loading" | "ready" | "error"
+
+let engineRef: any = null
+
+export function useNano() {
+  const [status, setStatus] = useState<NanoStatus>("checking")
+  const [progress, setProgress] = useState(0)
+
+  useEffect(() => {
+    initNano()
+  }, [])
+
+  async function initNano() {
+    // Check WebGPU
+    if (!navigator.gpu) {
+      setStatus("unavailable")
+      return
+    }
+
+    // Check if already cached
+    const cached = localStorage.getItem("nano_ready")
+    if (cached === "true" && engineRef) {
+      setStatus("ready")
+      return
+    }
+
+    setStatus("loading")
+
+    try {
+      const { CreateMLCEngine } = await import("@mlc-ai/web-llm")
+      engineRef = await CreateMLCEngine("Qwen3-1.5B-Instruct-q4f16_1-MLC", {
+        initProgressCallback: (p: any) => {
+          setProgress(Math.round(p.progress * 100))
+        }
+      })
+      localStorage.setItem("nano_ready", "true")
+      setStatus("ready")
+
+      window.dispatchEvent(new CustomEvent("nano-loaded"))
+    } catch (e) {
+      setStatus("error")
+      localStorage.removeItem("nano_ready")
+    }
+  }
+
+  async function chat(messages: { role: string; content: string }[]): Promise<ReadableStream | null> {
+    if (!engineRef || status !== "ready") return null
+
+    return new ReadableStream({
+      async start(controller) {
+        const reply = await engineRef.chat.completions.create({
+          messages,
+          stream: true,
+          temperature: 0.7
+        })
+        for await (const chunk of reply) {
+          const token = chunk.choices?.[0]?.delta?.content
+          if (token) controller.enqueue(new TextEncoder().encode(token))
+        }
+        controller.close()
+      }
+    })
+  }
+
+  return { status, progress, chat, isReady: status === "ready" }
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 13: VOICE HOOK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /hooks/useVoice.ts
+"use client"
+
+import { useState, useRef } from "react"
+
+export function useVoice() {
+  const [isListening, setIsListening] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const recognitionRef = useRef<any>(null)
+
+  function startListening(onResult: (text: string) => void) {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) return
+
+    const recognition = new SpeechRecognition()
+    recognition.lang = "en-US"
+    recognition.continuous = false
+    recognition.interimResults = false
+
+    recognition.onresult = (e: any) => {
+      onResult(e.results[0][0].transcript)
+      setIsListening(false)
+    }
+    recognition.onerror = () => setIsListening(false)
+    recognition.onend = () => setIsListening(false)
+
+    recognitionRef.current = recognition
+    recognition.start()
+    setIsListening(true)
+  }
+
+  function stopListening() {
+    recognitionRef.current?.stop()
+    setIsListening(false)
+  }
+
+  async function speak(text: string) {
+    setIsSpeaking(true)
+    const truncated = text.slice(0, 500)
+
+    // Try ElevenLabs first
+    try {
+      const res = await fetch("/api/voice/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: truncated })
+      })
+      if (res.ok) {
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        audio.onended = () => { setIsSpeaking(false); URL.revokeObjectURL(url) }
+        await audio.play()
+        return
+      }
+    } catch {}
+
+    // Fallback: Web Speech API
+    const utter = new SpeechSynthesisUtterance(truncated)
+    utter.lang = "en-US"
+    utter.onend = () => setIsSpeaking(false)
+    speechSynthesis.speak(utter)
+  }
+
+  function stopSpeaking() {
+    speechSynthesis.cancel()
+    setIsSpeaking(false)
+  }
+
+  return { isListening, isSpeaking, startListening, stopListening, speak, stopSpeaking }
+}
+
+File: /app/api/voice/tts/route.ts
+
+export async function POST(req: Request) {
+  const { text } = await req.json()
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM"
+
+  const res = await fetch(
+    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "xi-api-key": process.env.ELEVENLABS_KEY!
+      },
+      body: JSON.stringify({
+        text: text.slice(0, 500),
+        model_id: "eleven_turbo_v2",
+        voice_settings: { stability: 0.5, similarity_boost: 0.8 }
+      })
+    }
+  )
+
+  if (!res.ok) return Response.json({ error: "TTS failed" }, { status: 500 })
+
+  return new Response(res.body, {
+    headers: {
+      "Content-Type": "audio/mpeg",
+      "Transfer-Encoding": "chunked"
+    }
+  })
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 14: FILE PARSING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /app/api/parse/route.ts
+
+import { NextRequest } from "next/server"
+
+export async function POST(req: NextRequest) {
+  const formData = await req.formData()
+  const file = formData.get("file") as File
+  const sessionId = formData.get("sessionId") as string
+
+  if (!file) return Response.json({ error: "No file" }, { status: 400 })
+
+  const buffer = Buffer.from(await file.arrayBuffer())
+  let text = ""
+
+  if (file.name.endsWith(".pdf")) {
+    const pdfParse = (await import("pdf-parse")).default
+    const data = await pdfParse(buffer)
+    text = data.text
+  } else if (file.name.endsWith(".docx")) {
+    const mammoth = await import("mammoth")
+    const result = await mammoth.extractRawText({ buffer })
+    text = result.value
+  } else if (file.name.endsWith(".txt") || file.name.endsWith(".md")) {
+    text = buffer.toString("utf-8")
+  } else if (file.name.endsWith(".csv")) {
+    text = buffer.toString("utf-8")
+  } else if (file.type.startsWith("image/")) {
+    // Send to Gemini Vision
+    const base64 = buffer.toString("base64")
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inline_data: { mime_type: file.type, data: base64 } },
+              { text: "Describe and extract all text from this image in detail." }
+            ]
+          }]
+        })
+      }
+    )
+    const data = await res.json()
+    text = data.candidates?.[0]?.content?.parts?.[0]?.text || ""
+  }
+
+  // Chunk into 2000 char pieces with 200 char overlap
+  const chunks: string[] = []
+  for (let i = 0; i < text.length; i += 1800) {
+    chunks.push(text.slice(Math.max(0, i - 200), i + 1800))
+  }
+
+  // Store in Redis with 2hr TTL
+  const { redis } = await import("@/lib/redis")
+  await redis.set(`session:${sessionId}:chunks`, JSON.stringify(chunks), { ex: 7200 })
+  await redis.set(`session:${sessionId}:filename`, file.name, { ex: 7200 })
+
+  return Response.json({
+    success: true,
+    chunks: chunks.length,
+    filename: file.name,
+    preview: text.slice(0, 300)
+  })
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 15: RAZORPAY SUBSCRIPTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /app/api/subscription/create/route.ts
+
+const PLANS = {
+  prime: { amount: 9900, name: "Zero Prime", period: "monthly" },
+  apex: { amount: 29900, name: "Zero Apex", period: "monthly" },
+  agent: { amount: 99900, name: "Zero Agent CEO", period: "monthly" }
+}
+
+export async function POST(req: Request) {
+  const { plan, userId } = await req.json()
+  const planConfig = PLANS[plan as keyof typeof PLANS]
+  if (!planConfig) return Response.json({ error: "Invalid plan" }, { status: 400 })
+
+  const credentials = Buffer.from(
+    `${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`
+  ).toString("base64")
+
+  const res = await fetch("https://api.razorpay.com/v1/orders", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Basic ${credentials}`
+    },
+    body: JSON.stringify({
+      amount: planConfig.amount,
+      currency: "INR",
+      receipt: `zero_${userId}_${Date.now()}`,
+      notes: { userId, plan }
+    })
+  })
+
+  const order = await res.json()
+  return Response.json({
+    orderId: order.id,
+    amount: planConfig.amount,
+    currency: "INR",
+    keyId: process.env.RAZORPAY_KEY_ID,
+    planName: planConfig.name
+  })
+}
+
+File: /app/api/subscription/webhook/route.ts
+
+import crypto from "crypto"
+import { createClient } from "@supabase/supabase-js"
+
+export async function POST(req: Request) {
+  const body = await req.text()
+  const signature = req.headers.get("x-razorpay-signature")
+
+  const expected = crypto
+    .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET!)
+    .update(body)
+    .digest("hex")
+
+  if (signature !== expected) {
+    return Response.json({ error: "Invalid signature" }, { status: 400 })
+  }
+
+  const event = JSON.parse(body)
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_KEY!
+  )
+
+  if (event.event === "payment.captured") {
+    const { userId, plan } = event.payload.payment.entity.notes
+    await supabase.from("subscriptions").upsert({
+      user_id: userId,
+      plan,
+      status: "active",
+      razorpay_payment_id: event.payload.payment.entity.id,
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    })
+    await supabase.auth.admin.updateUserById(userId, {
+      user_metadata: { plan }
+    })
+  }
+
+  return Response.json({ received: true })
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 16: REDIS CLIENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /lib/redis.ts
+
+import { Redis } from "@upstash/redis"
+export const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_URL!,
+  token: process.env.UPSTASH_REDIS_TOKEN!
+})
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 17: MEMORY EXPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /app/api/memory/export/route.ts
+
+import { createClient } from "@supabase/supabase-js"
+import { sign } from "jsonwebtoken"
+
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url)
+  const userId = searchParams.get("userId")
+  if (!userId) return Response.json({ error: "No userId" }, { status: 400 })
+
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_KEY!
+  )
+  const { data: memories } = await supabase
+    .from("user_memories")
+    .select("fact")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(100)
+
+  const token = sign(
+    { userId, memories: memories?.map(m => m.fact) },
+    process.env.MEMORY_SECRET!,
+    { expiresIn: "90d" }
+  )
+
+  const mcpConfig = JSON.stringify({
+    mcpServers: {
+      zeroMemory: {
+        command: "npx",
+        args: ["-y", "@zero-ai/memory-mcp"],
+        env: {
+          USER_TOKEN: token,
+          SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL
+        }
+      }
+    }
+  }, null, 2)
+
+  return new Response(mcpConfig, {
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Disposition": "attachment; filename=zero-memory-mcp.json"
+    }
+  })
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 18: MIDDLEWARE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+File: /middleware.ts
+
+import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs"
+import { NextResponse } from "next/server"
+import type { NextRequest } from "next/server"
+
+export async function middleware(req: NextRequest) {
+  const res = NextResponse.next()
+  const supabase = createMiddlewareClient({ req, res })
+  await supabase.auth.getSession()
+
+  const { pathname } = req.nextUrl
+  const protectedRoutes = ["/chat", "/settings", "/api/chat", "/api/agent", "/api/memory"]
+  if (protectedRoutes.some(r => pathname.startsWith(r))) {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      return NextResponse.redirect(new URL("/auth/login", req.url))
+    }
+  }
+  return res
+}
+
+export const config = {
+  matcher: ["/chat/:path*", "/settings/:path*", "/api/chat", "/api/agent/:path*", "/api/memory/:path*"]
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PACKAGES TO INSTALL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Run these commands:
+npm install @mlc-ai/web-llm @upstash/redis @supabase/supabase-js @supabase/auth-helpers-nextjs
+npm install pdf-parse mammoth jsonwebtoken
+npm install -D @types/pdf-parse @types/jsonwebtoken
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENVIRONMENT VARIABLES (.env.local)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_KEY=
+GEMINI_KEY 1=
+gemini key 2=
+gemini key 3
+gemini key 4
+SILICONFLOW_KEY_1=
+SILICONFLOW_KEY_2=
+SILICONFLOW_KEY_3=
+SILICONFLOW_KEY_4=
+SILICONFLOW_KEY_5=
+SILICONFLOW_KEY_6=
+FIREWORKS_KEY=
+CEREBRAS_KEY=
+NOVITA_KEY=
+TOGETHER_KEY=
+HF_TOKEN_1=
+HF_TOKEN_APEX_1=
+HF_SPACE_PRIME_1=username/space-name
+HF_SPACE_PRIME_2=username/space-name
+HF_SPACE_PRIME_3=username/space-name
+HF_SPACE_PRIME_4=username/space-name
+HF_SPACE_PRIME_5=username/space-name
+HF_SPACE_PRIME_6=username/space-name
+HF_SPACE_APEX_1=username/space-name
+HF_SPACE_APEX_2=username/space-name
+HF_SPACE_APEX_3=username/space-name
+HF_SPACE_APEX_4=username/space-name
+SERPER_KEY=
+BRAVE_KEY=
+TAVILY_KEY=
+ELEVENLABS_KEY=
+ELEVENLABS_VOICE_ID=
+STABLE_HORDE_KEY=0000000000
+E2B_KEY=
+UPSTASH_REDIS_URL=
+UPSTASH_REDIS_TOKEN=
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+RAZORPAY_WEBHOOK_SECRET=
+N8N_WEBHOOK_URL=
+MEMORY_SECRET=your-random-secret-string
+CRON_SECRET=your-random-cron-secret
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VERCEL.JSON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{
+  "crons": [
+    { "path": "/api/cron/ping", "schedule": "*/4 * * * *" }
+  ],
+  "functions": {
+    "app/api/agent/route.ts": { "maxDuration": 60 },
+    "app/api/appfactory/route.ts": { "maxDuration": 30 },
+    "app/api/parse/route.ts": { "maxDuration": 30 }
+  }
+}
+
+Implement every section completely. Do not skip any file.
