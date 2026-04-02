@@ -221,6 +221,13 @@ export function useNano() {
   // ─── BOOT SEQUENCE ───────────────────────────────────────────────
   useEffect(() => {
     mountedRef.current = true
+    
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (isMobile) {
+      console.log("[Nano] Mobile detected. Skipping local AI auto-load for performance.");
+      setStatus("unavailable");
+      return;
+    }
 
     // Step 1: Load 0.5B instantly → user can chat immediately
     loadFastModel().then(() => {

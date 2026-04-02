@@ -82,7 +82,7 @@ export function useChat() {
     }
   }, [messages, isHydrated])
 
-  const sendMessage = useCallback(async (content: string, model: AIModel = 'nano-fast', skill?: string) => {
+  const sendMessage = useCallback(async (content: string, model: AIModel = 'prime', skill?: string) => {
     // Add user message
     const userMessage: ChatMessage = {
       id: generateId(),
