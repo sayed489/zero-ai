@@ -1,6 +1,6 @@
 {
   "crons": [
-    { "path": "/api/cron/ping", "schedule": "*/4 * * * *" }
+    { "path": "/api/cron/ping", "schedule": "0 0 * * *" }
   ],
   "functions": {
     "app/api/agent/route.ts": { "maxDuration": 60 },
