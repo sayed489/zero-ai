@@ -18,7 +18,7 @@ export async function GET(req: Request) {
     .limit(100)
 
   const token = sign(
-    { userId, memories: memories?.map((m) => m.fact) },
+    { userId, memories: (memories as any[])?.map((m: any) => m.fact) },
     process.env.MEMORY_SECRET!,
     { expiresIn: "90d" }
   )
