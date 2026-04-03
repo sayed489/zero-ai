@@ -1,7 +1,7 @@
 'use client'
 
 import { MessageBubble } from '@/components/chat/message-bubble'
-import { ZeroThinking } from '@/components/mascot/zero-thinking'
+import { AIThinking, AISearching, AIGenerating } from '@/components/chat/ai-thinking'
 import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/lib/types'
 
@@ -32,17 +32,21 @@ export function MessageList({ messages, isLoading, isThinking, thinkingStatus, o
         ))}
         
         {isThinking && (
-          <div className={cn('py-4 flex flex-col items-start gap-2 animate-in fade-in slide-in-from-left-2 duration-700', !compact && 'py-6')}>
-            <div className="flex items-center gap-3 text-text-3 px-1">
-               <div className="flex gap-1.5 items-center">
-                  <div className="h-1.5 w-1.5 rounded-full bg-zero-300 animate-pulse" style={{ animationDuration: '1s' }} />
-                  <div className="h-1.5 w-1.5 rounded-full bg-zero-300 animate-pulse opacity-60" style={{ animationDuration: '1s', animationDelay: '200ms' }} />
-                  <div className="h-1.5 w-1.5 rounded-full bg-zero-300 animate-pulse opacity-30" style={{ animationDuration: '1s', animationDelay: '400ms' }} />
-               </div>
-               <span className="text-sm font-medium tracking-tight animate-pulse underline decoration-zero-300/30 underline-offset-4 decoration-2">
-                 {thinkingStatus || 'Thinking...'}
-               </span>
-            </div>
+          <div className={cn('animate-in fade-in slide-in-from-bottom-2 duration-500', !compact && 'py-2')}>
+            {thinkingStatus?.toLowerCase().includes('search') ? (
+              <AISearching query={thinkingStatus.replace(/searching|for|the web/gi, '').trim()} />
+            ) : thinkingStatus?.toLowerCase().includes('generat') ? (
+              <AIGenerating what={thinkingStatus.replace(/generating/gi, '').trim() || 'response'} />
+            ) : (
+              <AIThinking 
+                status={thinkingStatus || 'Thinking...'} 
+                type={
+                  thinkingStatus?.toLowerCase().includes('analyz') ? 'analyzing' :
+                  thinkingStatus?.toLowerCase().includes('search') ? 'searching' :
+                  'thinking'
+                }
+              />
+            )}
           </div>
         )}
       </div>

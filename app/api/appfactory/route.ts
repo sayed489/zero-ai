@@ -1,6 +1,5 @@
 import { buildApp } from "@/lib/appFactory"
 import { checkTierRateLimit } from "@/lib/rateLimit"
-import { createClient } from "@supabase/supabase-js"
 
 export const runtime = "nodejs"
 export const maxDuration = 60

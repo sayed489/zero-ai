@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useState } from 'react'
-import { Menu, Ghost, Plus, Cloud, Sun, CloudRain, CloudLightning, Moon, Code, Brain, X, AlertCircle, Zap, Rocket } from 'lucide-react'
+import { Menu, Ghost, Plus, Cloud, Sun, CloudRain, CloudLightning, Moon, Code, Brain, X, AlertCircle, Zap, Rocket, Cpu } from 'lucide-react'
 import Link from 'next/link'
 import { ZeroMascot } from '@/components/mascot/zero-mascot'
 import { RamenBowl } from '@/components/mascot/ramen-bowl'
@@ -186,82 +186,51 @@ export function ChatArea({
             </button>
           )}
           
-          {/* Pico Download Permission - Manual Trigger */}
-          {selectedModel === 'pico' && nano?.status === 'unavailable' && (
-            <div className="mr-3 flex items-center gap-3 animate-in slide-in-from-right-4 duration-500">
-              <div className="flex flex-col items-end">
-                <div className="text-[10px] font-black text-emerald-500 uppercase tracking-tighter">
-                  Local AI Offline
+          {/* Pico Status Badge - Compact Premium UI */}
+          {selectedModel === 'pico' && (
+            <div className="mr-3 animate-in fade-in duration-300">
+              {nano?.status === 'unavailable' && (
+                <button 
+                  onClick={nano.forceDownload}
+                  className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition-all"
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Enable Pico</span>
+                </button>
+              )}
+
+              {(nano?.status === 'checking' || nano?.status === 'loading') && (
+                <div className="flex items-center gap-3 px-3 py-1.5 rounded-xl bg-bg-2 border border-border">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-xs text-text-2">Downloading</span>
+                  </div>
+                  <div className="w-20 h-1.5 bg-bg-3 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-emerald-400 rounded-full transition-all duration-300"
+                      style={{ width: `${nano.progress}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-medium text-emerald-400">{nano.progress}%</span>
                 </div>
-                <div className="text-[9px] text-text-3 font-medium text-right">
-                  4B Coder
-                </div>
-              </div>
-              <button 
-                onClick={nano.forceDownload}
-                className="flex items-center gap-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-4 py-1.5 text-xs font-bold text-emerald-500 transition-all hover:bg-emerald-500/20 hover:scale-105 shadow-lg shadow-emerald-500/5 active:scale-95"
-              >
-                <Zap className="h-3.5 w-3.5" />
-                Enable Pico
-              </button>
-            </div>
-          )}
-          
-          {/* Pico Loading Progress - Premium Indicator */}
-          {selectedModel === 'pico' && (nano?.status === 'checking' || nano?.status === 'loading') && (
-            <div className="mr-3 flex w-[260px] flex-col gap-1.5 animate-in fade-in slide-in-from-right-4 duration-500">
-              <div className="flex w-full items-center justify-between text-[11px] font-bold text-text-2 uppercase tracking-tight">
-                <span className="flex items-center gap-1.5">
-                  <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Pico Neural Link
-                </span>
-                <span className="font-mono text-emerald-400">{nano.progress}%</span>
-              </div>
-              <div className="relative h-2 w-full overflow-hidden rounded-full bg-bg-3 border border-border shadow-inner">
-                <div 
-                  className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-600 via-emerald-400 to-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.3)]"
-                  style={{ width: `${nano.progress}%`, transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] text-text-3 font-medium truncate max-w-[180px]">
-                  {nano.statusText}
-                </p>
+              )}
+
+              {nano?.status === 'error' && (
                 <button 
                   onClick={nano.repairAndRetry}
-                  className="text-[10px] font-bold text-text-3 hover:text-red-400 transition-colors uppercase tracking-tighter"
+                  className="flex items-center gap-2 rounded-xl bg-red-500/10 border border-red-500/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-500/20 transition-all"
                 >
-                  Reset
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  <span>Repair</span>
                 </button>
-              </div>
-            </div>
-          )}
+              )}
 
-          {selectedModel === 'pico' && nano?.status === 'error' && (
-            <div className="mr-3 flex items-center gap-3 animate-in slide-in-from-right-4 duration-500">
-              <div className="flex flex-col items-end">
-                <div className="text-[10px] font-black text-red-500 uppercase tracking-tighter">
-                  {nano.lastError?.bug || "Engine Conflict"}
+              {nano?.status === 'ready' && (
+                <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5">
+                  <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-xs font-medium text-emerald-400">Pico Ready</span>
                 </div>
-                <div className="text-[9px] text-text-3 font-medium max-w-[150px] truncate text-right">
-                  {nano.lastError?.fix}
-                </div>
-              </div>
-              <button 
-                onClick={nano.repairAndRetry}
-                className="flex items-center gap-1.5 rounded-full bg-red-500/10 border border-red-500/20 px-4 py-1.5 text-xs font-bold text-red-500 transition-all hover:bg-red-500/20 hover:scale-105 shadow-lg shadow-red-500/5 active:scale-95"
-              >
-                <AlertCircle className="h-3.5 w-3.5" />
-                Repair
-              </button>
-            </div>
-          )}
-
-          {/* Pico Ready Badge */}
-          {selectedModel === 'pico' && nano?.status === 'ready' && (
-            <div className="mr-3 flex items-center gap-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-4 py-1.5 text-xs font-bold text-emerald-500 shadow-lg shadow-emerald-500/5 animate-in zoom-in duration-300">
-              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="hidden sm:inline">Pico 4B Online</span>
+              )}
             </div>
           )}
 
@@ -304,122 +273,111 @@ export function ChatArea({
               </div>
 
               {selectedModel === 'pico' && !nano?.isReady ? (
-                /* Premium Pico Hub (Glassmorphic) */
-                <div className="flex flex-col items-center justify-center py-12 px-8 animate-in fade-in zoom-in-95 duration-1000 w-full max-w-2xl text-center">
-                   <div className="relative mb-16 group">
-                     {/* Dynamic background glow */}
-                     <div className="absolute -inset-16 rounded-full bg-emerald-500/10 blur-[120px] group-hover:bg-emerald-500/20 transition-all duration-1000 animate-pulse" />
-                     <div className="relative h-40 w-40 rounded-[2.5rem] bg-bg-1/80 border border-emerald-500/30 flex items-center justify-center shadow-[0_0_50px_rgba(16,185,129,0.15)] hover:scale-105 transition-all duration-700 backdrop-blur-3xl">
-                       <div className="absolute inset-0 rounded-[2.5rem] bg-gradient-to-br from-emerald-500/10 to-transparent opacity-50" />
-                       <Brain className="h-20 w-20 text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]" />
-                       <div className="absolute -top-3 -right-3 bg-emerald-500 text-[11px] font-black px-3 py-1.5 rounded-xl text-white shadow-xl shadow-emerald-500/20 uppercase tracking-widest border border-white/20">Local</div>
-                     </div>
-                   </div>
+                /* Premium Pico Hub - Billion Dollar UI */
+                <div className="flex flex-col items-center justify-center py-8 px-6 animate-in fade-in zoom-in-95 duration-700 w-full max-w-xl text-center">
+                  {/* Floating orb with glow */}
+                  <div className="relative mb-10">
+                    <div className="absolute inset-0 rounded-full bg-gradient-to-br from-emerald-400/30 to-teal-500/30 blur-3xl scale-150 animate-pulse" />
+                    <div className="relative">
+                      <div className="h-28 w-28 rounded-3xl bg-gradient-to-br from-emerald-400 via-emerald-500 to-teal-600 flex items-center justify-center shadow-2xl shadow-emerald-500/40 rotate-3 hover:rotate-0 transition-all duration-500">
+                        <Cpu className="h-12 w-12 text-white drop-shadow-lg" />
+                      </div>
+                      {/* Status badge */}
+                      <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-bg-1 border border-emerald-500/30 shadow-lg">
+                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          On-Device AI
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
-                   <div className="space-y-8 w-full max-w-lg relative z-10">
-                     <div className="space-y-3">
-                       <h2 className="text-4xl font-black text-text-1 tracking-tight bg-gradient-to-b from-text-1 to-text-1/60 bg-clip-text text-transparent">
-                         Pico Neural Engine
-                       </h2>
-                       <p className="text-sm text-text-3 font-semibold uppercase tracking-[0.3em] opacity-60">
-                         High-Performance Offline Intelligence
-                       </p>
-                     </div>
-                     <div className="bg-white/5 backdrop-blur-3xl border border-white/10 rounded-[2rem] p-8 shadow-2xl shadow-black/20 space-y-8 relative overflow-hidden group/card text-center">
-                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-emerald-500/50 to-transparent opacity-50" />
-                        
-                        {nano?.status === 'unavailable' ? (
-                          <div className="flex flex-col items-center gap-6 animate-in fade-in slide-in-from-bottom-8 duration-1000">
-                             <div className="flex flex-col items-center gap-1.5">
-                               <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-2">
-                                 < Zap className="w-3 h-3" />
-                                 System Optimization Ready
-                               </div>
-                               <div className="text-2xl font-black text-text-1">1.1 GB Sync Required</div>
-                               <p className="text-xs text-text-3 font-medium max-w-[280px] mx-auto leading-relaxed">
-                                 Initialize the 4B Coder core with a 32,768 token context for private, high-fidelity development.
-                               </p>
-                             </div>
+                  {/* Title */}
+                  <h2 className="text-3xl font-bold text-text-1 mb-2">
+                    Zero Pico
+                  </h2>
+                  <p className="text-sm text-text-3 mb-8 max-w-xs">
+                    100% private AI that runs entirely on your device. No cloud, no tracking, just fast.
+                  </p>
 
-                             <button 
-                               onClick={nano.forceDownload}
-                               className="w-full flex items-center justify-center gap-4 rounded-2xl bg-emerald-500 px-8 py-5 text-sm font-black text-white transition-all hover:bg-emerald-400 hover:scale-[1.02] shadow-[0_20px_40px_-12px_rgba(16,185,129,0.4)] active:scale-[0.98] group/btn"
-                             >
-                               Initialize Pico Core (4B 4-bit)
-                               <Rocket className="h-4 w-4 group-hover/btn:translate-x-1 group-hover/btn:-translate-y-1 transition-transform" />
-                             </button>
-
-                             <div className="flex items-center justify-center gap-6 pt-2">
-                               <div className="flex flex-col items-center">
-                                 <span className="text-[10px] font-bold text-text-1">32K</span>
-                                 <span className="text-[8px] text-text-3 uppercase tracking-widest font-black">Context</span>
-                               </div>
-                               <div className="w-px h-6 bg-border/50" />
-                               <div className="flex flex-col items-center">
-                                 <span className="text-[10px] font-bold text-text-1">4-BIT</span>
-                                 <span className="text-[8px] text-text-3 uppercase tracking-widest font-black">Weights</span>
-                               </div>
-                               <div className="w-px h-6 bg-border/50" />
-                               <div className="flex flex-col items-center">
-                                 <span className="text-[10px] font-bold text-text-1">2TH</span>
-                                 <span className="text-[8px] text-text-3 uppercase tracking-widest font-black">Threads</span>
-                               </div>
-                             </div>
-                          </div>
-                        ) : (
-                          <div className="space-y-6 animate-in fade-in duration-500">
-                             <div className="flex items-center justify-between px-1">
-                               <div className="flex flex-col items-start text-left">
-                                 <span className="text-[11px] font-black text-emerald-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                                   <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
-                                   {nano?.status === 'ready' ? 'Neural Link Online' : 'Syncing Neural Pathways'}
-                                 </span>
-                               </div>
-                               <span className="font-mono text-xl font-black text-text-1">{nano?.progress ?? 0}%</span>
-                             </div>
-
-                             <div className="relative h-4 w-full bg-bg-3 rounded-full overflow-hidden border border-white/5 shadow-inner">
-                                <div 
-                                  className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-600 via-emerald-400 to-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.5)] transition-all duration-700 ease-out"
-                                  style={{ width: `${nano?.progress ?? 0}%` }}
-                                />
-                                <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.1)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.1)_50%,rgba(255,255,255,0.1)_75%,transparent_75%,transparent)] bg-[length:20px_20px] animate-[shimmer_2s_linear_infinite]" />
-                             </div>
-
-                             <div className="flex items-center justify-between py-2 border-t border-white/5">
-                               <p className="text-[10px] font-bold text-text-3 uppercase tracking-widest animate-pulse">
-                                  {nano?.statusText || "Syncing weights from hub..."}
-                               </p>
-                               <div className="text-[9px] font-black text-emerald-500/60 uppercase">
-                                 Local Computation
-                               </div>
-                             </div>
-                          </div>
-                        )}
-                     </div>
-
-                     <div className="h-px w-32 bg-gradient-to-r from-transparent via-emerald-500/20 to-transparent mx-auto" />
-
-                     <div className="space-y-4">
-                        <p className="text-[10px] font-black text-text-3 uppercase tracking-[0.4em] opacity-40">Fallback Intelligence</p>
-                        <div className="grid grid-cols-2 gap-4 px-8">
-                           <button 
-                             onClick={() => onModelChange('prime')}
-                             className="group flex flex-col items-center gap-2.5 p-4 rounded-2xl border border-white/5 bg-white/5 hover:bg-white/10 hover:border-emerald-500/30 transition-all hover:-translate-y-1 active:scale-95"
-                           >
-                              <Zap className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />
-                              <div className="text-[10px] font-black text-text-1 uppercase tracking-widest">Prime 1.5</div>
-                           </button>
-                           <button 
-                             onClick={() => onModelChange('apex')}
-                             className="group flex flex-col items-center gap-2.5 p-4 rounded-2xl border border-white/5 bg-white/5 hover:bg-white/10 hover:border-purple-500/30 transition-all hover:-translate-y-1 active:scale-95"
-                           >
-                              <Brain className="w-5 h-5 text-purple-400 group-hover:scale-110 transition-transform" />
-                              <div className="text-[10px] font-black text-text-1 uppercase tracking-widest">Apex 3.1</div>
-                           </button>
+                  {/* Main card */}
+                  <div className="w-full bg-bg-2/50 backdrop-blur-xl border border-border rounded-2xl p-6 space-y-6">
+                    {nano?.status === 'unavailable' ? (
+                      <>
+                        {/* Feature badges */}
+                        <div className="flex flex-wrap justify-center gap-2 mb-4">
+                          <span className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-400">
+                            Private
+                          </span>
+                          <span className="px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-xs font-medium text-blue-400">
+                            Offline
+                          </span>
+                          <span className="px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 text-xs font-medium text-violet-400">
+                            Fast
+                          </span>
+                          <span className="px-3 py-1 rounded-full bg-orange-500/10 border border-orange-500/20 text-xs font-medium text-orange-400">
+                            ~2GB
+                          </span>
                         </div>
-                     </div>
-                   </div>
+
+                        {/* Download button */}
+                        <button 
+                          onClick={nano.forceDownload}
+                          className="w-full flex items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-6 py-4 text-sm font-semibold text-white transition-all hover:shadow-lg hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-[0.98]"
+                        >
+                          <Zap className="h-4 w-4" />
+                          Download Pico AI
+                          <Rocket className="h-4 w-4" />
+                        </button>
+
+                        <p className="text-xs text-text-3">
+                          One-time download. Works offline forever.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        {/* Loading state */}
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium text-text-2 flex items-center gap-2">
+                              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                              {nano?.status === 'ready' ? 'Ready' : 'Downloading...'}
+                            </span>
+                            <span className="text-sm font-bold text-emerald-400">{nano?.progress ?? 0}%</span>
+                          </div>
+
+                          {/* Progress bar */}
+                          <div className="relative h-2 w-full bg-bg-3 rounded-full overflow-hidden">
+                            <div 
+                              className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500 ease-out"
+                              style={{ width: `${nano?.progress ?? 0}%` }}
+                            />
+                          </div>
+
+                          <p className="text-xs text-text-3">{nano?.statusText}</p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Alternative models */}
+                  <div className="mt-8 w-full">
+                    <p className="text-xs text-text-3 mb-3">Or use cloud models</p>
+                    <div className="flex gap-2 justify-center">
+                      <button 
+                        onClick={() => onModelChange('nano')}
+                        className="px-4 py-2 rounded-lg bg-bg-2 border border-border text-sm font-medium text-text-2 hover:text-text-1 hover:bg-bg-3 transition-all"
+                      >
+                        Zero Nano
+                      </button>
+                      <button 
+                        onClick={() => onModelChange('prime')}
+                        className="px-4 py-2 rounded-lg bg-bg-2 border border-border text-sm font-medium text-text-2 hover:text-text-1 hover:bg-bg-3 transition-all"
+                      >
+                        Zero Prime
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 /* Default Welcome Content */

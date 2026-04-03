@@ -99,8 +99,8 @@ export function useChat() {
       // ── LOCAL GENERATION (PICO 2B) ───────────────────────────────────────
       if (model === 'pico') {
         // Artificial delay for Pico "Thinking" experience
-        setThinkingStatus('Accessing Distilled Knowledge...')
-        await new Promise(resolve => setTimeout(resolve, 800))
+        setThinkingStatus('Processing locally...')
+        await new Promise(resolve => setTimeout(resolve, 500))
 
         if (!nano.isReady) {
           throw new Error("Local AI model is downloading. Please wait for it to finish.")
@@ -149,10 +149,15 @@ export function useChat() {
         setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, isStreaming: false } : m))
       } else {
         // ── CLOUD GENERATION ───────────────────────────────────────────────
-        if (content.toLowerCase().match(/search|find|news|current|what is/)) {
-           setThinkingStatus('Searching knowledge base...')
+        const lowerContent = content.toLowerCase()
+        if (lowerContent.match(/search|find|news|current|latest/)) {
+           setThinkingStatus('Searching the web...')
+        } else if (lowerContent.match(/code|build|create|component|app/)) {
+           setThinkingStatus('Generating code...')
+        } else if (lowerContent.match(/analyze|explain|understand/)) {
+           setThinkingStatus('Analyzing...')
         } else {
-           setThinkingStatus('Synthesizing answer...')
+           setThinkingStatus('Thinking...')
         }
 
 

@@ -1,17 +1,10 @@
 import { createBrowserClient } from '@supabase/ssr'
 
-// Check if Supabase credentials are available
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-// Flag to check if Supabase is configured
-export const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey)
-
 // Only warn once
 let hasWarnedAboutMissingConfig = false
 
 // Create a mock client that doesn't throw errors when Supabase isn't configured
-const mockClient = {
+const createMockClient = () => ({
   auth: {
     getSession: async () => ({ data: { session: null }, error: null }),
     getUser: async () => ({ data: { user: null }, error: null }),
@@ -21,30 +14,43 @@ const mockClient = {
     onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
   },
   from: () => ({
-    select: () => ({ data: [], error: null, order: () => ({ data: [], error: null, limit: () => ({ data: [], error: null }) }) }),
+    select: () => ({ 
+      data: [], 
+      error: null, 
+      order: () => ({ 
+        data: [], 
+        error: null, 
+        limit: () => ({ data: [], error: null }) 
+      }) 
+    }),
     insert: () => ({ data: null, error: null }),
     update: () => ({ data: null, error: null, eq: () => ({ data: null, error: null }) }),
     delete: () => ({ data: null, error: null, eq: () => ({ data: null, error: null }) }),
     upsert: () => ({ data: null, error: null }),
   }),
   channel: () => ({
-    on: () => ({ subscribe: () => {} }),
-    subscribe: () => {},
+    on: () => ({ subscribe: () => ({}) }),
+    subscribe: () => ({}),
   }),
   removeChannel: () => {},
-} as any
+}) as ReturnType<typeof createBrowserClient>
+
+// Check if Supabase is configured - as a function to avoid early evaluation
+export function isSupabaseConfigured(): boolean {
+  return !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+}
 
 export function createClient() {
-  if (!isSupabaseConfigured) {
-    if (!hasWarnedAboutMissingConfig) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    if (!hasWarnedAboutMissingConfig && typeof window !== 'undefined') {
       hasWarnedAboutMissingConfig = true
       console.info('[Zero AI] Running in offline mode - add Supabase credentials for cloud features')
     }
-    return mockClient
+    return createMockClient()
   }
   
-  return createBrowserClient(
-    supabaseUrl!,
-    supabaseAnonKey!
-  )
+  return createBrowserClient(supabaseUrl, supabaseAnonKey)
 }

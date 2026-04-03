@@ -5,25 +5,24 @@ import { type WebWorkerMLCEngine, prebuiltAppConfig } from "@mlc-ai/web-llm"
 
 export type NanoStatus = "unavailable" | "checking" | "loading" | "ready" | "error"
 
-// ─── PICO INTELLIGENCE (Qwen 2.5 3B Instruct - 4-bit quantized - ~2GB) ───────
-// Upgraded from 1.5B to 3B for significantly better reasoning while staying fast
-const PICO_MODEL = "Qwen2.5-3B-Instruct-q4f16_1-MLC"
-const PICO_MODEL_URL = "https://huggingface.co/mlc-ai/Qwen2.5-3B-Instruct-q4f16_1-MLC/resolve/main/"
+// ─── PICO INTELLIGENCE (Phi-3.5 Mini - 4-bit quantized - ~2.4GB) ───────
+// Fast, capable on-device AI with strong reasoning - from MLC prebuilt models
+const PICO_MODEL = "Phi-3.5-mini-instruct-q4f16_1-MLC"
 
-const PICO_SYSTEM = `You are Zero Pico, an advanced on-device AI assistant powered by Qwen 2.5.
+const PICO_SYSTEM = `You are Zero Pico, an on-device AI assistant.
 You run entirely on the user's device - fast, private, and always available offline.
 
 CAPABILITIES:
-- General conversation and Q&A with high intelligence
 - Code generation, debugging, and explanation
-- Creative writing, analysis, and summarization
-- Math, logic, and reasoning tasks
+- General conversation and Q&A
+- Creative writing and summarization
+- Math and reasoning tasks
 
-STYLE:
-- Be concise but thorough
-- Use markdown formatting for code blocks and lists
-- Be helpful, friendly, and direct
-- Never mention your model name or technical details to users`
+RULES:
+- Be concise and direct
+- Use markdown for code blocks
+- Never mention model names
+- Output high-quality React/TypeScript code when asked`
 
 // ─── MODULE SINGLETONS (survive re-renders and HMR) ────────────────
 const _global = typeof window !== 'undefined' ? (window as any) : {}
@@ -174,21 +173,6 @@ export function useNano() {
               }
             }
           },
-          appConfig: { 
-            model_list: [
-              {
-                "model_id": PICO_MODEL,
-                "model": PICO_MODEL_URL,
-                "model_lib": "https://raw.githubusercontent.com/user-attachments/assets/webgpu-models/Qwen2.5-3B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
-                "vram_required_MB": 2500, // 3B model with KV cache
-                "low_resource_required": false,
-                "overrides": {
-                  "context_window_size": 8192, // Optimized for speed
-                }
-              }
-            ],
-            useIndexedDBCache: true 
-          },
         })
 
         if (typeof window !== 'undefined') {
@@ -254,10 +238,9 @@ export function useNano() {
         try {
           const stream = await picoEngine!.chat.completions.create({
             messages: [{ role: "system", content: PICO_SYSTEM }, ...messages],
-            temperature: 0.6,
-            max_tokens: 2048,
+            temperature: 0.7,
+            max_tokens: 4096,
             stream: true,
-            top_p: 0.9,
           })
 
           for await (const chunk of stream as any) {
