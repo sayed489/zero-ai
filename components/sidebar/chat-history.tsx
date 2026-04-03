@@ -3,44 +3,100 @@
 import { useState, useEffect } from 'react'
 import { MoreHorizontal, Trash2, Edit2, Share } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/supabase/client'
+import { Conversation } from '@/lib/types'
 
 export function ChatHistory() {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
-  const [chats, setChats] = useState<{ id: string, title: string, active: boolean }[]>([])
+  const [chats, setChats] = useState<{ id: string, title: string, active: boolean, model: string }[]>([])
+  const supabase = createClient()
 
   useEffect(() => {
-    // Basic implementation: read the single chat history we have
-    const loadChats = () => {
+    let isMounted = true
+
+    const loadChats = async () => {
       try {
-        const saved = localStorage.getItem('zero-chat-history')
-        if (saved) {
-          const parsed = JSON.parse(saved)
-          if (parsed && parsed.length > 0) {
-            const firstMsg = parsed.find((m: any) => m.role === 'user')
-            setChats([{
-              id: 'current',
-              title: firstMsg ? (firstMsg.content.slice(0, 30) + '...') : 'New Conversation',
-              active: true
-            }])
+        const { data: { session } } = await supabase.auth.getSession()
+        
+        if (!session) {
+          // Fallback to local storage for guests
+          const saved = localStorage.getItem('zero-chat-history')
+          if (saved && isMounted) {
+            const parsed = JSON.parse(saved)
+            if (parsed && parsed.length > 0) {
+              const firstMsg = parsed.find((m: any) => m.role === 'user')
+              setChats([{
+                id: 'current',
+                title: firstMsg ? (firstMsg.content.slice(0, 30) + '...') : 'New Conversation',
+                active: true,
+                model: 'pico'
+              }])
+            } else {
+               setChats([{ id: 'new', title: 'New Conversation', active: true, model: 'pico' }])
+            }
+          }
+          return
+        }
+
+        // Fetch from Supabase for logged in users
+        const { data: convos, error } = await supabase
+          .from('conversations')
+          .select('*')
+          .order('updated_at', { ascending: false })
+          .limit(20)
+
+        if (error) throw error
+
+        if (isMounted) {
+          if (convos && convos.length > 0) {
+            setChats(convos.map((c: any) => ({
+              id: c.id,
+              title: c.title || 'New Conversation',
+              active: false, // We don't track active yet from URL, just a basic list
+              model: c.model_tier || 'pico'
+            })))
           } else {
-             setChats([{ id: 'new', title: 'New Conversation', active: true }])
+            setChats([{ id: 'new', title: 'New Conversation', active: true, model: 'pico' }])
           }
         }
       } catch (e) {
-         setChats([{ id: 'new', title: 'New Conversation', active: true }])
+        console.error("Failed to load chats:", e)
       }
     }
 
     loadChats()
-    window.addEventListener('storage', loadChats)
-    // Small polling to keep it synced without complex event emitters
-    const interval = setInterval(loadChats, 2000)
+
+    // Subscribe to changes (unique channel name prevents Strict Mode reuse bugs)
+    const channelId = `history_${Date.now()}_${Math.random()}`
+    const channel = supabase.channel(channelId)
+    
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
+      loadChats()
+    })
+    
+    channel.subscribe()
+
     return () => {
-      window.removeEventListener('storage', loadChats)
-      clearInterval(interval)
+      isMounted = false
+      supabase.removeChannel(channel)
     }
-  }, [])
+  }, [supabase])
+
+  const deleteChat = async (id: string) => {
+    if (id === 'current' || id === 'new') {
+      localStorage.removeItem('zero-chat-history')
+      window.location.reload()
+      return
+    }
+
+    try {
+      await supabase.from('conversations').delete().eq('id', id)
+      setChats(prev => prev.filter(c => c.id !== id))
+    } catch (e) {
+      console.error("Deletion failed:", e)
+    }
+  }
 
   return (
     <div className="space-y-0.5">
@@ -62,13 +118,18 @@ export function ChatHistory() {
                 : 'text-text-2 hover:bg-bg-2 hover:text-text-1'
             )}
             onClick={() => {
-              if (chat.id === 'new') {
+              if (chat.id === 'new' || chat.id === 'current') {
                 localStorage.removeItem('zero-chat-history')
                 window.location.reload()
+              } else {
+                // Future: push router to /chat/id
               }
             }}
           >
-            <span className="flex-1 truncate text-sm">{chat.title}</span>
+            <div className="flex flex-col flex-1 min-w-0">
+              <span className="truncate text-sm">{chat.title}</span>
+              <span className="text-[10px] text-text-3 capitalize">{chat.model.replace('-', ' ')}</span>
+            </div>
             
             {/* More options button */}
             {(hoveredId === chat.id || menuOpenId === chat.id) && (
@@ -88,14 +149,14 @@ export function ChatHistory() {
           {menuOpenId === chat.id && (
             <div className="absolute right-0 top-full z-10 mt-1 w-40 rounded-lg border border-border bg-bg-1 py-1 shadow-xl">
               <button 
-                onClick={() => {
-                  localStorage.removeItem('zero-chat-history')
-                  window.location.reload()
+                onClick={(e) => {
+                  e.stopPropagation()
+                  deleteChat(chat.id)
                 }}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/10"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                Clear Chat
+                Delete Chat
               </button>
             </div>
           )}

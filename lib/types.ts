@@ -62,15 +62,15 @@ export interface MemoryMatch {
   similarity: number
 }
 
-// AI Model Types - Zero's custom model names
-export type AIModel = 
-  | 'nano-fast'
-  | 'nano-pro'
+// ─── AI Model Types — Zero's 5-tier system ──────────────────────────────────
+export type AIModel =
+  | 'pico'
+  | 'nano'
   | 'prime'
   | 'apex'
   | 'agentic-chad'
 
-export type ModelTier = 'default' | 'pro' | 'new'
+export type ModelTier = 'local' | 'cloud' | 'agent'
 
 export interface ModelInfo {
   id: AIModel
@@ -79,55 +79,62 @@ export interface ModelInfo {
   provider: string
   speed: 'fast' | 'balanced' | 'powerful'
   tier: ModelTier
+  freeDailyLimit?: number   // shown in selector badge
+  isLocal?: boolean
   supportsExtendedThinking?: boolean
   supportsVision?: boolean
   supportsSearch?: boolean
 }
 
-// Zero's exclusive models
+// Zero's 5-tier model lineup
 export const MODELS: ModelInfo[] = [
-  { 
-    id: 'nano-fast', 
-    name: 'Nano Fast', 
-    description: 'Instant responses · 0.5B on-device',
+  {
+    id: 'pico',
+    name: 'Zero Pico',
+    description: 'Runs 100% on your device · No cloud',
+    provider: 'WebLLM (Local)',
+    speed: 'fast',
+    tier: 'local',
+    isLocal: true,
+    freeDailyLimit: 999999,
+  },
+  {
+    id: 'nano',
+    name: 'Zero Nano',
+    description: 'Fast everyday tasks · 10/day free',
     provider: 'Zero AI',
     speed: 'fast',
-    tier: 'default'
+    tier: 'cloud',
+    freeDailyLimit: 10,
   },
-  { 
-    id: 'nano-pro', 
-    name: 'Nano Pro', 
-    description: 'Full power coding · 3B on-device',
+  {
+    id: 'prime',
+    name: 'Zero Prime',
+    description: 'Deep reasoning · 5/day free',
     provider: 'Zero AI',
     speed: 'balanced',
-    tier: 'default'
+    tier: 'cloud',
+    freeDailyLimit: 5,
   },
-  { 
-    id: 'prime', 
-    name: 'Zero Prime', 
-    description: 'Balanced power & speed',
-    provider: 'Zero AI',
-    speed: 'balanced',
-    tier: 'pro'
-  },
-  { 
-    id: 'apex', 
-    name: 'Zero Apex', 
-    description: 'Maximum reasoning power',
+  {
+    id: 'apex',
+    name: 'Zero Apex',
+    description: 'Maximum intelligence · 3/day free',
     provider: 'Zero AI',
     speed: 'powerful',
-    tier: 'pro',
-    supportsExtendedThinking: true
-  },
-  { 
-    id: 'agentic-chad', 
-    name: 'Agentic Chad', 
-    description: 'Autonomous agent for complex tasks',
-    provider: 'Zero AI',
-    speed: 'powerful',
-    tier: 'new',
+    tier: 'cloud',
+    freeDailyLimit: 3,
     supportsExtendedThinking: true,
-    supportsSearch: true
+  },
+  {
+    id: 'agentic-chad',
+    name: 'Agentic Chad',
+    description: 'Autonomous · Web search · Code exec',
+    provider: 'Zero AI',
+    speed: 'powerful',
+    tier: 'agent',
+    supportsExtendedThinking: true,
+    supportsSearch: true,
   },
 ]
 
@@ -195,6 +202,20 @@ export const SKILLS: Skill[] = [
     name: 'Analyze Image',
     description: 'Understand and describe images',
     icon: '👁️',
+    category: 'tools'
+  },
+  {
+    id: 'analyze-file',
+    name: 'Analyze File',
+    description: 'Read and extract data from documents',
+    icon: '📄',
+    category: 'tools'
+  },
+  {
+    id: 'roast',
+    name: 'Roast Me',
+    description: 'Provide savage, witty roasts based on my input',
+    icon: '🔥',
     category: 'tools'
   }
 ]
@@ -286,6 +307,14 @@ export const MCP_CONNECTORS: MCPConnector[] = [
     icon: '🧠',
     status: 'connected',
     capabilities: ['store', 'retrieve', 'export']
+  },
+  {
+    id: 'astra-db',
+    name: 'Astra DB',
+    description: '10GB free vector memory storage',
+    icon: '🗄️',
+    status: 'disconnected',
+    capabilities: ['vector_store', 'search', 'scale']
   },
   {
     id: 'code-exec',

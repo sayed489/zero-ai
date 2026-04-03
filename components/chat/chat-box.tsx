@@ -22,7 +22,7 @@ export function ChatBox({
 }: ChatBoxProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [isMinimized, setIsMinimized] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<AIModel>('nano-fast')
+  const [selectedModel, setSelectedModel] = useState<AIModel>('pico')
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const {

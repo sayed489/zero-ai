@@ -17,8 +17,8 @@ export function MilkBox({ size = 80, animated = true }: MilkBoxProps) {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const W = size * 2
-    const H = size * 2.2
+    const W = size * 4
+    const H = size * 4
     canvas.width = W
     canvas.height = H
 
@@ -29,13 +29,7 @@ export function MilkBox({ size = 80, animated = true }: MilkBoxProps) {
 
       // Use global performance.now() to sync with ZeroMascot
       const t = performance.now() / 16.66
-
-      // 4000ms cycle = 240 frames at 60fps. (sync exact same math in zero-mascot)
       const cycle = Math.floor(t) % 240
-
-      // Phase 1 (0-120): Drinking (Box UP)
-      // Phase 2 (120-180): Ahhh (Box DOWN)
-      // Phase 3 (180-240): Wiping (Box DOWN)
 
       const isDrinking = cycle < 120
       const isWiping = cycle > 180
@@ -43,32 +37,37 @@ export function MilkBox({ size = 80, animated = true }: MilkBoxProps) {
       // Lift animation
       let liftY = 0
       let tilt = 0
+      const maxLift = -size * 0.4
       if (isDrinking) {
-        // smooth lift and hold
-        if (cycle < 20) liftY = -25 * (cycle / 20)
-        else if (cycle > 100) liftY = -25 * ((120 - cycle) / 20)
+        if (cycle < 20) liftY = maxLift * (cycle / 20)
+        else if (cycle > 100) liftY = maxLift * ((120 - cycle) / 20)
         else {
-          liftY = -25
-          tilt = -0.3 + Math.sin(t * 0.1) * 0.05 // gently tilt while drinking
+          liftY = maxLift
+          tilt = -0.3 + Math.sin(t * 0.1) * 0.05
         }
       }
 
       ctx.save()
       const cx = W / 2
-      const cy = H * 0.65
+      // Maintain distance to bottom so position on page doesn't shift
+      const cy = H - size * 0.77 
       ctx.translate(cx, cy + liftY)
       ctx.rotate(tilt)
 
       // ── Core measurements for 3D isometric look ──
-      const bw = W * 0.45    // front width
-      const bh = H * 0.48    // body height
-      const sd = W * 0.2     // side depth
+      const bw = size * 0.9    
+      const bh = size * 1.056  
+      const sd = size * 0.4    
 
-      // Draw shadow
+      // Draw shadow (translate back down to the floor)
       ctx.fillStyle = 'rgba(0,0,0,0.1)'
       ctx.beginPath()
-      ctx.ellipse(0, bh / 2 + 5, bw, 8, 0, 0, Math.PI * 2)
+      // Shadow doesn't perfectly follow tilt/lift, counter rotate/translate
+      ctx.save()
+      ctx.rotate(-tilt)
+      ctx.ellipse(0, bh / 2 + 5 - liftY, bw, 8, 0, 0, Math.PI * 2)
       ctx.fill()
+      ctx.restore()
 
       // 1. Right Side Face (Darker Blue)
       ctx.fillStyle = '#3b82f6'
@@ -123,7 +122,7 @@ export function MilkBox({ size = 80, animated = true }: MilkBoxProps) {
       ctx.stroke()
 
       // "MILK" text on front face
-      ctx.font = `900 ${W * 0.12}px Impact, system-ui, sans-serif`
+      ctx.font = `900 ${size * 0.24}px Impact, system-ui, sans-serif`
       ctx.fillStyle = '#ffffff'
       ctx.textAlign = 'center'
 
@@ -131,33 +130,59 @@ export function MilkBox({ size = 80, animated = true }: MilkBoxProps) {
       ctx.save()
       ctx.translate(0, -bh * 0.1)
       ctx.fillText('MILK', 0, 0)
-      // Small bottom squares (nutrition box representation)
+      // Small bottom squares
       ctx.fillStyle = '#ffffff'
-      ctx.fillRect(-bw * 0.35, bh * 0.2, W * 0.15, W * 0.18)
+      ctx.fillRect(-bw * 0.35, bh * 0.2, size * 0.3, size * 0.36)
       ctx.restore()
 
-      // ── Arm (string connection) ──
-      ctx.strokeStyle = '#c4b5fd'
-      ctx.lineWidth = 3
+      // ── Arm (smooth connected cloud arm) ──
+      const hx = bw / 2 - 10
+      const hy = bh / 2 - 5
+      // Compute attachment to right side of Mascot (tucked closely inward).
+      // Since we are inside translate/rotate, we counterbalance the lift to keep arm anchored exactly to body
+      const absBodyAttachX = cx + size * 1.2
+      const absBodyAttachY = cy - size * 0.1
+      // Rotate and translate logic inverted so arm base point is fixed to canvas
+      const sT = Math.sin(-tilt); const cT = Math.cos(-tilt);
+      const shiftX = absBodyAttachX - cx
+      const shiftY = absBodyAttachY - (cy + liftY)
+      const attachX = shiftX * cT - shiftY * sT
+      const attachY = shiftX * sT + shiftY * cT
+
+      const armBounce = isDrinking && cycle >= 20 && cycle <= 100 ? Math.sin(t * 0.5) * 3 : 0
+
+      // "C" on vertical axis (sleeping) -> Pronounced downward U-bend for elbow
+      const cpX = attachX + size * 0.1 // Push elbow slightly outwards for puffiness
+      const cpY = Math.max(attachY, hy) + size * 0.8 // Curve downward towards body
+
+      ctx.strokeStyle = '#e9d5ff'
+      ctx.lineWidth = 14
       ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
       ctx.beginPath()
-      ctx.moveTo(bw / 2 - 10, bh / 2 - 5)
-      // Curve sideways and up exactly into the puffy sides of the cloud
-      // Needs to compensate for the rotation/translation. Exact calculated offset is (48, 2.7).
-      ctx.quadraticCurveTo(bw / 2 + 10, -10, 48, 2.7)
+      ctx.moveTo(attachX, attachY)
+      // Dynamic bouncing arm
+      ctx.quadraticCurveTo(cpX, cpY + armBounce, hx, hy)
       ctx.stroke()
 
-      // ── Hand holding milk box ──
+      ctx.strokeStyle = '#f3e8ff'
+      ctx.lineWidth = 10
+      ctx.beginPath()
+      ctx.moveTo(attachX, attachY)
+      ctx.quadraticCurveTo(cpX, cpY + armBounce, hx, hy)
+      ctx.stroke()
+
+      // ── Hand holding milk box (made smaller) ──
       ctx.fillStyle = '#e9d5ff'
       ctx.beginPath()
-      ctx.ellipse(bw / 2 - 10, bh / 2 - 5, 14, 20, Math.PI / 4, 0, Math.PI * 2)
+      ctx.ellipse(bw / 2 - 10, bh / 2 - 5, 10, 15, Math.PI / 4, 0, Math.PI * 2)
       ctx.fill()
       ctx.strokeStyle = '#c4b5fd'
       ctx.lineWidth = 1.5
       ctx.stroke()
-      // Thumb
+      // Thumb (made smaller)
       ctx.beginPath()
-      ctx.ellipse(bw / 2 - 18, bh / 2 - 15, 6, 12, Math.PI / 3, 0, Math.PI * 2)
+      ctx.ellipse(bw / 2 - 18, bh / 2 - 15, 4, 8, Math.PI / 3, 0, Math.PI * 2)
       ctx.fill()
 
       ctx.restore()
@@ -181,7 +206,7 @@ export function MilkBox({ size = 80, animated = true }: MilkBoxProps) {
   return (
     <canvas
       ref={canvasRef}
-      style={{ width: size, height: size * 1.1 }}
+      style={{ width: size * 2, height: size * 2 }}
       className="drop-shadow-xl saturate-150"
     />
   )

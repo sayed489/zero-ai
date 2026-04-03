@@ -1,108 +1,106 @@
-export const runtime = 'edge'
+import { createContext, runInContext } from "node:vm"
 
-const PISTON_URL = 'https://emkc.org/api/v2/piston/execute'
+export const runtime = "nodejs"
+export const maxDuration = 30
 
-const LANGUAGE_MAP: Record<string, { language: string; version: string }> = {
-  python: { language: 'python', version: '3.10' },
-  javascript: { language: 'javascript', version: '18.15' },
-  typescript: { language: 'typescript', version: '5.0' },
-  go: { language: 'go', version: '1.16' },
-  rust: { language: 'rust', version: '1.68' },
-  'c++': { language: 'c++', version: '10.2' },
-  cpp: { language: 'c++', version: '10.2' },
-  c: { language: 'c', version: '10.2' },
-  java: { language: 'java', version: '15' },
-  ruby: { language: 'ruby', version: '3.0' },
-  php: { language: 'php', version: '8.2' },
+const BLOCKED_PATTERNS = [
+  /require\s*\(\s*['"`]fs['"`]\s*\)/,
+  /require\s*\(\s*['"`]child_process['"`]\s*\)/,
+  /require\s*\(\s*['"`]path['"`]\s*\)/,
+  /require\s*\(\s*['"`]os['"`]\s*\)/,
+  /require\s*\(\s*['"`]net['"`]\s*\)/,
+  /require\s*\(\s*['"`]http['"`]\s*\)/,
+  /require\s*\(\s*['"`]https['"`]\s*\)/,
+  /process\.exit/,
+  /process\.env/,
+  /global\./,
+  /globalThis\./,
+  /__dirname/,
+  /__filename/,
+]
+
+function checkBlocked(code: string): string | null {
+  for (const p of BLOCKED_PATTERNS) {
+    if (p.test(code)) {
+      return `Forbidden: dangerous pattern detected — sandboxed execution does not allow system access`
+    }
+  }
+  return null
+}
+
+function safeStr(val: unknown): string {
+  if (typeof val === "string") return val
+  if (val === null) return "null"
+  if (val === undefined) return "undefined"
+  try { return JSON.stringify(val, null, 2) } catch { return String(val) }
 }
 
 export async function POST(req: Request) {
   try {
-    const { language, code } = await req.json()
-
-    if (!language || !code) {
-      return Response.json(
-        { error: 'Language and code are required' },
-        { status: 400 }
-      )
+    const { code, language = "javascript" } = await req.json() as {
+      code?: string
+      language?: string
     }
 
-    const langConfig = LANGUAGE_MAP[language.toLowerCase()]
-    if (!langConfig) {
-      return Response.json(
-        { error: `Unsupported language: ${language}` },
-        { status: 400 }
-      )
+    if (!code?.trim()) {
+      return Response.json({ error: "code is required" }, { status: 400 })
     }
 
-    const response = await fetch(PISTON_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        language: langConfig.language,
-        version: langConfig.version,
-        files: [
-          {
-            name: `main.${getExtension(language)}`,
-            content: code,
-          },
-        ],
-        stdin: '',
-        args: [],
-        compile_timeout: 10000,
-        run_timeout: 10000,
-      }),
-    })
-
-    if (!response.ok) {
-      return Response.json(
-        { error: 'Code execution service unavailable' },
-        { status: 503 }
-      )
+    const blockReason = checkBlocked(code)
+    if (blockReason) {
+      return Response.json({ error: blockReason }, { status: 400 })
     }
 
-    const result = await response.json()
+    const output: string[] = []
+    const t0 = Date.now()
 
-    // Combine compile and run output
-    let output = ''
-    if (result.compile?.output) {
-      output += result.compile.output
+    const mockConsole = {
+      log: (...args: unknown[]) => output.push(args.map(safeStr).join(" ")),
+      warn: (...args: unknown[]) => output.push("[warn] " + args.map(safeStr).join(" ")),
+      error: (...args: unknown[]) => output.push("[error] " + args.map(safeStr).join(" ")),
+      info: (...args: unknown[]) => output.push("[info] " + args.map(safeStr).join(" ")),
+      table: (data: unknown) => output.push(JSON.stringify(data, null, 2)),
     }
-    if (result.run?.output) {
-      output += result.run.output
+
+    const sandbox: Record<string, unknown> = {
+      console: mockConsole,
+      Math, JSON, Array, Object, String, Number, Boolean, Date,
+      Error, Map, Set, Promise, RegExp, Symbol,
+      parseInt, parseFloat, isNaN, isFinite,
+      encodeURIComponent, decodeURIComponent,
+      setTimeout: (fn: () => void, ms: number) => { if (ms < 2000 && typeof fn === "function") setTimeout(fn, ms) },
     }
-    if (result.run?.stderr) {
-      output += '\n' + result.run.stderr
+
+    try {
+      const ctx = createContext(sandbox)
+      const result = runInContext(code, ctx, {
+        timeout: 9500,
+        filename: "sandbox.js",
+        displayErrors: true,
+      })
+
+      if (result !== undefined && result !== null) {
+        const str = safeStr(result)
+        if (str !== "undefined" && !output.some(o => o.slice(0, 30) === str.slice(0, 30))) {
+          output.push("→ " + str)
+        }
+      }
+    } catch (execErr: unknown) {
+      const msg = execErr instanceof Error ? execErr.message : String(execErr)
+      return Response.json({
+        output,
+        error: msg,
+        executionTime: Date.now() - t0,
+      })
     }
 
     return Response.json({
-      output: output.trim() || 'No output',
-      exitCode: result.run?.code ?? 0,
+      output,
+      error: null,
+      executionTime: Date.now() - t0,
     })
-  } catch (error) {
-    console.error('Execute API error:', error)
-    return Response.json(
-      { error: 'Failed to execute code' },
-      { status: 500 }
-    )
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Unknown error"
+    return Response.json({ error: msg }, { status: 500 })
   }
-}
-
-function getExtension(language: string): string {
-  const extensions: Record<string, string> = {
-    python: 'py',
-    javascript: 'js',
-    typescript: 'ts',
-    go: 'go',
-    rust: 'rs',
-    'c++': 'cpp',
-    cpp: 'cpp',
-    c: 'c',
-    java: 'java',
-    ruby: 'rb',
-    php: 'php',
-  }
-  return extensions[language.toLowerCase()] || 'txt'
 }

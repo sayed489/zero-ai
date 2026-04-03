@@ -17,8 +17,8 @@ export function RamenBowl({ size = 100, animated = true }: RamenBowlProps) {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const W = size * 2
-    const H = size * 2
+    const W = size * 4
+    const H = size * 4
     canvas.width = W
     canvas.height = H
 
@@ -30,71 +30,113 @@ export function RamenBowl({ size = 100, animated = true }: RamenBowlProps) {
       const t = frame * 0.03
 
       const cx = W / 2
-      // Bowl held higher/closer — move cy up and inward
-      const cy = H * 0.52
-      const bowlWidth = W * 0.72
-      const bowlHeight = H * 0.32
+      // Maintain distance to bottom so position on page doesn't shift
+      const cy = H - size * 0.96 
+      const bowlWidth = size * 1.8
+      const bowlHeight = size * 0.8
 
-      // Steam wisps — wavy curling steam
+      // Premium Steam Wisps
       if (animated) {
-        for (let i = 0; i < 4; i++) {
-          const steamPhase = (t * 18 + i * 22) % 50
-          const steamAlpha = Math.max(0, 0.35 - steamPhase / 100)
-          const steamX = cx - bowlWidth * 0.18 + i * bowlWidth * 0.12
-          const steamY = cy - bowlHeight * 0.85 - steamPhase
-          const sway = Math.sin(t * 1.8 + i * 1.4) * 6
-          ctx.strokeStyle = `rgba(210,210,210,${steamAlpha})`
-          ctx.lineWidth = 3 + Math.sin(t + i) * 1
+        for (let i = 0; i < 5; i++) {
+          const phase = (t * 0.02 + i * 0.2) % 1
+          const steamAlpha = Math.sin(phase * Math.PI) * 0.45
+          const steamX = cx - bowlWidth * 0.25 + i * bowlWidth * 0.12
+          const steamY = cy - bowlHeight * 0.5 - phase * 45
+          
+          ctx.strokeStyle = `rgba(255,255,255,${steamAlpha})`
+          ctx.lineWidth = 5 + Math.sin(phase * Math.PI) * 4
           ctx.lineCap = 'round'
+          
           ctx.beginPath()
-          ctx.moveTo(steamX, steamY + steamPhase)
-          ctx.quadraticCurveTo(steamX + sway, steamY + steamPhase * 0.5, steamX - sway * 0.5, steamY)
+          ctx.moveTo(steamX, steamY + 20)
+          const s1 = Math.sin(t * 1.5 + i) * 12
+          const s2 = Math.sin(t * 1.0 + i * 2) * 14
+          ctx.bezierCurveTo(
+            steamX + s1, steamY + 10,
+            steamX - s2, steamY,
+            steamX + s1 * 0.5, steamY - 15
+          )
           ctx.stroke()
         }
       }
 
-      // Left arm (string connection)
+      // Left arm (thick connected cloud arm)
       const lx = cx - bowlWidth / 2 + 2
       const ly = cy + bowlHeight * 0.42
-      ctx.strokeStyle = '#c4b5fd'
-      ctx.lineWidth = 3
+
+      // Exact mascot left shoulder connection (tucked inward closer to bowl)
+      const attachLX = cx - size * 1.3
+      const attachLY = cy - size * 0.1
+      const armBounceLeft = animated ? Math.sin(t * 0.5) * 2 : 0
+
+      // "C" on vertical axis (sleeping) -> Pronounced downward U-bend for left elbow
+      const cpLX = attachLX - size * 0.1 // Curve outwards slightly for puffiness
+      const cpLY = Math.max(attachLY, ly) + size * 0.8 // Sag downward
+
+      ctx.strokeStyle = '#e9d5ff'
+      ctx.lineWidth = 15
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
       ctx.beginPath()
-      ctx.moveTo(lx, ly)
-      // curve sideways and up exactly into the left body edge coordinate (-4, 38)
-      ctx.quadraticCurveTo(lx - 5, ly - 5, -4, 38)
+      ctx.moveTo(attachLX, attachLY)
+      ctx.quadraticCurveTo(cpLX, cpLY + armBounceLeft, lx, ly)
+      ctx.stroke()
+      
+      // highlight inner arm
+      ctx.strokeStyle = '#f3e8ff'
+      ctx.lineWidth = 9
+      ctx.beginPath()
+      ctx.moveTo(attachLX, attachLY)
+      ctx.quadraticCurveTo(cpLX, cpLY + armBounceLeft, lx, ly)
       ctx.stroke()
 
-      // Left hand — held close to bowl bottom
-      ctx.fillStyle = '#e9d5ff'  // pale purple chibi hand
+      // Left hand — held close to bowl bottom (made smaller)
+      ctx.fillStyle = '#e9d5ff'  
       ctx.beginPath()
-      ctx.ellipse(lx, ly, 11, 16, -Math.PI / 6, 0, Math.PI * 2)
+      ctx.ellipse(lx, ly, 8, 12, -Math.PI / 6, 0, Math.PI * 2)
       ctx.fill()
       ctx.strokeStyle = '#c4b5fd'
       ctx.lineWidth = 1
       ctx.stroke()
-      // Left thumb wrapping
+      // Left thumb wrapping (made smaller)
       ctx.beginPath()
-      ctx.ellipse(lx + 7, ly - 5, 5, 10, Math.PI / 4, 0, Math.PI * 2)
+      ctx.ellipse(lx + 5, ly - 3, 3.5, 7, Math.PI / 4, 0, Math.PI * 2)
       ctx.fill()
 
-      // Right arm (string connection)
+      // Right arm (thick connected cloud arm)
       const handWaveY = animated ? Math.sin(t * 2) * 4 : 0
       const rx = cx + 22
       const ry = cy - bowlHeight * 0.85 + handWaveY
 
-      ctx.strokeStyle = '#c4b5fd'
-      ctx.lineWidth = 3
+      // Exact mascot right shoulder connection (tucked inward closer to bowl)
+      const attachRX = cx + size * 1.3
+      const attachRY = cy - size * 0.1
+      const armBounceRight = animated ? Math.sin(t * 0.5 + 1) * 2 : 0
+
+      // "C" on vertical axis (sleeping) -> Pronounced downward U-bend for right elbow
+      const cpRX = attachRX + size * 0.1 // Pushed slightly outward for puffiness
+      const cpRY = Math.max(attachRY, ry) + size * 0.8 // U bend downwards
+
+      ctx.strokeStyle = '#e9d5ff'
+      ctx.lineWidth = 14
       ctx.lineCap = 'round'
       ctx.beginPath()
-      ctx.moveTo(rx, ry)
-      // curve sideways and up exactly into the right body edge coordinate (W+4=92, 38)
-      ctx.quadraticCurveTo(rx + 5, ry - 5, 92, 38)
+      ctx.moveTo(attachRX, attachRY)
+      ctx.quadraticCurveTo(cpRX, cpRY + armBounceRight, rx - 2, ry)
       ctx.stroke()
 
-      // Right hand holding chopsticks — closer/tighter arc
+      // highlight inner arm
+      ctx.strokeStyle = '#f3e8ff'
+      ctx.lineWidth = 8
+      ctx.beginPath()
+      ctx.moveTo(attachRX, attachRY)
+      ctx.quadraticCurveTo(cpRX, cpRY + armBounceRight, rx - 2, ry)
+      ctx.stroke()
+
+      // Right hand holding chopsticks — closer/tighter arc (made smaller)
       ctx.fillStyle = '#e9d5ff'
       ctx.beginPath()
-      ctx.ellipse(rx, ry, 12, 12, 0, 0, Math.PI * 2)
+      ctx.ellipse(rx, ry, 9, 9, 0, 0, Math.PI * 2)
       ctx.fill()
       ctx.strokeStyle = '#c4b5fd'
       ctx.lineWidth = 1
@@ -117,29 +159,41 @@ export function RamenBowl({ size = 100, animated = true }: RamenBowlProps) {
       ctx.lineTo(cx + 7, cy - bowlHeight * 0.28)
       ctx.stroke()
 
-      // Noodles being lifted — continuous exactly to the mouth
-      ctx.strokeStyle = '#F5DEB3'
-      ctx.lineWidth = 3
+      // Noodles being lifted — juicy premium continuous flow exactly to the mouth
       ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
 
-      const noodleWave = animated ? Math.sin(t * 2) * 3 : 0
+      const noodleWave = animated ? Math.sin(t * 2) * 4 : 0
       const startY = cy - bowlHeight * 0.28
-
-      // Calculate exact mouth position relative to this canvas.
-      // Top of canvas is roughly Y=44 in parent, mascot mouth is Y=76 in parent.
-      // This means mouth is EXACTLY at Y=32 in this local canvas.
-      const mouthYLocal = 32
+      // Fix cropping: map exact mouth position dynamically instead of hardcoded 32
+      const mouthYLocal = cy - size * 0.31 
       const noodleLen = startY - mouthYLocal // Distance from bowl to mouth
 
+      // Draw shadow behind lifted noodles first for 3D depth
+      ctx.strokeStyle = 'rgba(205, 133, 63, 0.35)' // warm broth shadow
+      ctx.lineWidth = 5
       for (let i = 0; i < 5; i++) {
         ctx.beginPath()
         const startX = cx - 6 + i * 3
         ctx.moveTo(startX, startY)
-
         for (let y = 0; y <= noodleLen; y += 4) {
-          // decrease wave amplitude as it gets closer to mouth
-          const amplitude = (1 - (y / noodleLen)) * (4 + noodleWave)
-          const waveX = Math.sin((y / 8) + t * 3 + i) * amplitude
+          const amplitude = (1 - (y / noodleLen)) * (5 + noodleWave)
+          const waveX = Math.sin((y / 10) + t * 2.5 + i * 1.2) * amplitude
+          ctx.lineTo(startX + waveX, startY - y + 1) // slightly offset shadow
+        }
+        ctx.stroke()
+      }
+
+      // Draw vivid premium foreground noodles
+      ctx.strokeStyle = '#FDECA6' // brighter rich pale-gold
+      ctx.lineWidth = 3.5
+      for (let i = 0; i < 5; i++) {
+        ctx.beginPath()
+        const startX = cx - 6 + i * 3
+        ctx.moveTo(startX, startY)
+        for (let y = 0; y <= noodleLen; y += 4) {
+          const amplitude = (1 - (y / noodleLen)) * (5 + noodleWave)
+          const waveX = Math.sin((y / 10) + t * 2.5 + i * 1.2) * amplitude
           ctx.lineTo(startX + waveX, startY - y)
         }
         ctx.stroke()
@@ -239,8 +293,8 @@ export function RamenBowl({ size = 100, animated = true }: RamenBowlProps) {
   return (
     <canvas
       ref={canvasRef}
-      style={{ width: size, height: size }}
-      className="drop-shadow-lg"
+      style={{ width: size * 2, height: size * 2 }}
+      className="drop-shadow-lg scale-[1.02]"
     />
   )
 }

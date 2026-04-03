@@ -1,143 +1,272 @@
 import { TEMPLATES, TemplateKey } from "./templates"
+import { createClient } from "@supabase/supabase-js"
 
-async function classifyTemplate(description: string, apiKey: string): Promise<TemplateKey> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `Which template fits this request? Reply with ONLY one word from this list:
-landing, dashboard, tool, game
-
-Request: "${description}"
-Answer:`,
-              },
-            ],
-          },
-        ],
-        generationConfig: { maxOutputTokens: 10 },
-      }),
-    }
-  )
-  const data = await res.json()
-  const answer = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toLowerCase()
-  const valid: TemplateKey[] = ["landing", "dashboard", "tool", "game"]
-  return valid.includes(answer as TemplateKey) ? (answer as TemplateKey) : "landing"
+// Supabase service client for saving jobs
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
 }
 
+// ─── Key selection ────────────────────────────────────────────────────────────
+function getAppFactoryKey(): { key: string; model: string } {
+  // Try Gemini 2.5 Flash first (better quality)
+  const keys25 = [
+    process.env.GEMINI_2_5_FLASH_KEY_1,
+    process.env.GEMINI_2_5_FLASH_KEY_2,
+  ].filter((k): k is string => !!k && !k.startsWith("your-"))
+
+  if (keys25.length > 0) {
+    const key = keys25[Math.floor(Math.random() * keys25.length)]
+    return { key, model: process.env.FACTORY_MODEL_ID || "gemini-2.5-pro" }
+  }
+
+  // Fallback: Gemini 2.0 Flash (working keys always available)
+  const keys20 = [
+    process.env.GEMINI_FLASH_KEY_1,
+    process.env.GEMINI_FLASH_KEY_2,
+    process.env.GEMINI_FLASH_KEY_3,
+    process.env.GEMINI_FLASH_KEY_4,
+  ].filter((k): k is string => !!k && !k.startsWith("your-"))
+
+  if (keys20.length > 0) {
+    const key = keys20[Math.floor(Math.random() * keys20.length)]
+    return { key, model: "gemini-2.5-flash" }
+  }
+
+  return { key: "", model: "gemini-2.5-flash" }
+}
+
+// ─── Template classifier ──────────────────────────────────────────────────────
+async function classifyTemplate(
+  description: string,
+  apiKey: string,
+  model: string
+): Promise<TemplateKey> {
+  const validKeys = Object.keys(TEMPLATES) as TemplateKey[]
+  const keyList = validKeys.join(", ")
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `Which template best fits this app request? Reply with ONLY one word from this list:
+${keyList}
+
+App request: "${description}"
+Best template:`,
+                },
+              ],
+            },
+          ],
+          generationConfig: { maxOutputTokens: 10, temperature: 0 },
+        }),
+      }
+    )
+    const data = await res.json()
+    const answer = data.candidates?.[0]?.content?.parts?.[0]?.text
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^a-z-]/g, "")
+
+    return validKeys.includes(answer as TemplateKey)
+      ? (answer as TemplateKey)
+      : "landing"
+  } catch {
+    return "landing"
+  }
+}
+
+// ─── File customizer ──────────────────────────────────────────────────────────
 async function customizeFile(
   filename: string,
   baseContent: string,
   description: string,
   complexity: string,
-  apiKey: string
+  apiKey: string,
+  model: string
 ): Promise<{ filename: string; content: string }> {
   const isCSS = filename.endsWith(".css")
-  const isJS = filename.endsWith(".js")
+  const isJS = filename.endsWith(".js") || filename.endsWith(".ts")
   const isHTML = filename.endsWith(".html")
 
-  // Bulletproof instructions ensuring stunning UI even for poor prompts
   const instructions = isHTML
-    ? "Update the structural HTML elements exactly matching the user request. MUST use stunning, modern Tailwind CSS classes (e.g. glassmorphism `bg-black/40 backdrop-blur-md`, flawless padding, radiant gradients `bg-gradient-to-r from-purple-500 to-pink-500`, subtle borders `border-white/10`). DO NOT remove the Tailwind CDN script. IT MUST LOOK LIKE A BILLION DOLLAR STARTUP. NO EXCEPTIONS."
+    ? "Update HTML elements to precisely match the user request. Use stunning modern Tailwind classes: glassmorphism (`bg-black/40 backdrop-blur-md`), gradients, and premium spacing. The result MUST look like a billion-dollar startup. KEEP the Tailwind CDN script tag."
     : isJS
-    ? "Inject working JS functionality for the specific app. Link exactly to the HTML IDs and classes. Use modern ES6. Keep it clean and functional."
-    : ""
+    ? "Add working JavaScript/TypeScript functionality that matches the request. Link to existing HTML IDs and classes. Use modern ES6+. Keep it clean."
+    : isCSS
+    ? "Update CSS to enhance the design with premium animations, smooth transitions, and modern aesthetics."
+    : "Update this file to match the user request."
 
-  const model = complexity === 'complex' ? 'gemini-2.5-flash' : 'gemini-1.5-pro' // Actually let's use 2.5 flash if complex, or 1.5 pro for simple (Wait, they requested Gemini 1.5 Flash for simple)
-  const finalModel = complexity === 'complex' ? 'gemini-2.5-flash' : 'gemini-1.5-flash'
-  
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${finalModel}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `You are customizing a ${filename} file to build this app: "${description}"
+  const prompt = `You are customizing a ${filename} file to build this app: "${description}"
 
-CRITICAL INSTRUCTIONS: ${instructions}
-Return ONLY the raw file content based heavily around the scaffolding provided below. DO NOT EVER output markdown codeblocks (e.g no \`\`\`html). Output ONLY the raw file characters.
+CRITICAL: ${instructions}
 
-Base file to modify:
-${baseContent}`,
-              },
-            ],
+Return ONLY the raw file content — NO markdown code blocks, NO backticks, NO explanations.
+
+Base template to customize:
+${baseContent}`
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            maxOutputTokens: complexity === "complex" ? 8192 : 4096,
+            temperature: 0.4,
           },
-        ],
-        generationConfig: { maxOutputTokens: 4096 },
-      }),
+        }),
+      }
+    )
+    const data = await res.json()
+    let content: string =
+      data.candidates?.[0]?.content?.parts?.[0]?.text || baseContent
+
+    // Strip any markdown code blocks the model returns despite instructions
+    const match = content.match(/```[\w]*\n([\s\S]*?)```/)
+    if (match) {
+      content = match[1].trim()
+    } else {
+      content = content
+        .replace(/^```[\w]*\n?/gm, "")
+        .replace(/```$/gm, "")
+        .trim()
     }
-  )
-  const data = await res.json()
-  let content = data.candidates?.[0]?.content?.parts?.[0]?.text || baseContent
-  
-  // Robust extraction: If the model uses code blocks despite instructions, extract exactly what's inside
-  const codeBlockMatch = content.match(/```[a-z]*\n([\s\S]*?)```/)
-  if (codeBlockMatch) {
-    content = codeBlockMatch[1].trim()
-  } else {
-    // Fallback: Just trim any accidental backticks
-    content = content.replace(/^```[a-z]*\n?/gm, "").replace(/```$/gm, "").trim()
+
+    return { filename, content }
+  } catch {
+    return { filename, content: baseContent }
+  }
+}
+
+// ─── StackBlitz URL builder ───────────────────────────────────────────────────
+function buildStackBlitzUrl(
+  files: { filename: string; content: string }[]
+): string {
+  // StackBlitz embed via POST form approach using query params
+  const fileObj = files.reduce<Record<string, string>>((acc, f) => {
+    acc[f.filename] = f.content
+    return acc
+  }, {})
+
+  const params = new URLSearchParams()
+  params.set("title", "Zero App")
+  params.set("description", "Generated by Zero AI")
+
+  // StackBlitz supports file params as files[path]=content
+  for (const [path, content] of Object.entries(fileObj)) {
+    params.set(`files[${path}]`, content)
   }
 
-  return { filename, content }
+  return `https://stackblitz.com/run?${params.toString()}`
 }
 
-function buildStackBlitzUrl(files: { filename: string; content: string }[]): string {
-  const fileObj: Record<string, string> = {}
-  files.forEach((f) => {
-    fileObj[f.filename] = f.content
-  })
-  const encoded = Buffer.from(JSON.stringify(fileObj)).toString("base64")
-  return `https://stackblitz.com/run?view=preview&title=Zero+App&files=${encodeURIComponent(encoded)}`
+// ─── Save to Supabase ─────────────────────────────────────────────────────────
+export async function saveAppFactoryJob(opts: {
+  userId: string
+  description: string
+  template: string
+  files: { filename: string; content: string }[]
+  stackblitzUrl: string
+  complexity: string
+}): Promise<string | null> {
+  try {
+    const supabase = getSupabase()
+    if (!supabase) return null
+
+    const { data, error } = await supabase
+      .from("app_factory_jobs")
+      .insert({
+        user_id: opts.userId,
+        description: opts.description,
+        template_id: opts.template,
+        complexity: opts.complexity,
+        status: "completed",
+        generated_files: opts.files.reduce<Record<string, string>>((acc, f) => {
+          acc[f.filename] = f.content
+          return acc
+        }, {}),
+        stackblitz_url: opts.stackblitzUrl,
+        created_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single()
+
+    if (error) {
+      console.error("[AppFactory] Supabase save error:", error.message)
+      return null
+    }
+
+    return data?.id || null
+  } catch (e: any) {
+    console.error("[AppFactory] Save failed:", e.message)
+    return null
+  }
 }
 
-export async function buildApp(description: string, complexity: 'simple' | 'complex'): Promise<{
+// ─── Main buildApp export ─────────────────────────────────────────────────────
+export async function buildApp(
+  description: string,
+  complexity: "simple" | "complex",
+  userId?: string
+): Promise<{
   files: { filename: string; content: string }[]
   stackblitzUrl: string
   template: string
+  jobId: string | null
 }> {
-  let apiKey = ''
-  if (complexity === 'complex') {
-    // Rotate between 2 keys
-    const keys = [process.env.GEMINI_2_5_FLASH_KEY_1, process.env.GEMINI_2_5_FLASH_KEY_2]
-      .filter(k => k && !k.startsWith('your-'))
-    apiKey = keys.length > 0 ? (keys[Math.floor(Math.random() * keys.length)] as string) : ''
-  } else {
-    // Rotate between 4 keys
-    const keys = [
-      process.env.GEMINI_FLASH_KEY_1, process.env.GEMINI_FLASH_KEY_2,
-      process.env.GEMINI_FLASH_KEY_3, process.env.GEMINI_FLASH_KEY_4
-    ].filter(k => k && !k.startsWith('your-'))
-    apiKey = keys.length > 0 ? (keys[Math.floor(Math.random() * keys.length)] as string) : ''
+  const { key: apiKey, model } = getAppFactoryKey()
+
+  if (!apiKey) {
+    throw new Error(
+      "No Gemini API keys configured. Add GEMINI_FLASH_KEY_1 to your .env.local"
+    )
   }
 
-  // Fallback to older env key if new rotated ones missing
-  if (!apiKey) apiKey = process.env.GEMINI_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
-
-  const templateKey = await classifyTemplate(description, apiKey)
+  const templateKey = await classifyTemplate(description, apiKey, model)
   const template = TEMPLATES[templateKey]
+
+  if (!template) {
+    throw new Error(`Template "${templateKey}" not found`)
+  }
 
   // Customize all files in parallel
   const customizedFiles = await Promise.all(
     Object.entries(template.files).map(([filename, baseContent]) =>
-      customizeFile(filename, baseContent, description, complexity, apiKey)
+      customizeFile(filename, baseContent, description, complexity, apiKey, model)
     )
   )
 
   const stackblitzUrl = buildStackBlitzUrl(customizedFiles)
 
+  // Save to Supabase (fire-and-forget if no userId)
+  const jobId = userId
+    ? await saveAppFactoryJob({
+        userId,
+        description,
+        template: templateKey,
+        files: customizedFiles,
+        stackblitzUrl,
+        complexity,
+      })
+    : null
+
   return {
     files: customizedFiles,
     stackblitzUrl,
     template: templateKey,
+    jobId,
   }
 }

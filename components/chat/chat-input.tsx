@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Plus, Mic, X, Image, Code, Lightbulb, Search, Zap, Download, Brain, Eye, ArrowUp } from 'lucide-react'
+import { Plus, Mic, MicOff, X, Image, Code, Lightbulb, Search, Zap, Download, Brain, Eye, ArrowUp, Flame, FileText, Paperclip } from 'lucide-react'
 import { ModelSelector, VoiceIndicator } from '@/components/chat/model-selector'
+import { useVoice } from '@/hooks/useVoice'
 import { cn } from '@/lib/utils'
 import type { AIModel, Skill } from '@/lib/types'
 import { SKILLS } from '@/lib/types'
@@ -24,7 +25,9 @@ const skillIcons: Record<string, React.ReactNode> = {
   'code-exec': <Zap className="h-4 w-4" />,
   'memory-export': <Download className="h-4 w-4" />,
   'memory-add': <Brain className="h-4 w-4" />,
-  'analyze-image': <Eye className="h-4 w-4" />
+  'analyze-image': <Eye className="h-4 w-4" />,
+  'analyze-file': <FileText className="h-4 w-4" />,
+  'roast': <Flame className="h-4 w-4 text-orange-500" />,
 }
 
 export function ChatInput({
@@ -36,13 +39,14 @@ export function ChatInput({
   variant = 'default'
 }: ChatInputProps) {
   const [value, setValue] = useState('')
-  const [isListening, setIsListening] = useState(false)
   const [extendedThinking, setExtendedThinking] = useState(false)
   const [showSkills, setShowSkills] = useState(false)
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null)
+  const [attachedFile, setAttachedFile] = useState<{name: string, content: string} | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const recognitionRef = useRef<any>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const skillsRef = useRef<HTMLDivElement>(null)
+  const voice = useVoice()
 
   // Auto-resize textarea
   useEffect(() => {
@@ -53,6 +57,13 @@ export function ChatInput({
       textarea.style.height = `${Math.max(scrollHeight, 52)}px`
     }
   }, [value])
+
+  // Fill textarea with voice transcript
+  useEffect(() => {
+    if (voice.transcript) {
+      setValue(voice.transcript)
+    }
+  }, [voice.transcript])
 
   // Close skills on click outside
   useEffect(() => {
@@ -66,13 +77,35 @@ export function ChatInput({
   }, [])
 
   const handleSubmit = () => {
-    if (!value.trim() || isLoading) return
-    onSend(value.trim(), selectedSkill?.id)
+    if ((!value.trim() && !attachedFile) || isLoading) return
+    
+    let finalContent = value.trim()
+    if (attachedFile) {
+       finalContent = `[Attached File: ${attachedFile.name}]\n\n\`\`\`\n${attachedFile.content}\n\`\`\`\n\nUser Question/Instruction: ${finalContent}`
+    }
+    
+    onSend(finalContent, selectedSkill?.id)
     setValue('')
     setSelectedSkill(null)
+    setAttachedFile(null)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+     const file = e.target.files?.[0]
+     if (!file) return
+     
+     const reader = new FileReader()
+     reader.onload = async (e) => {
+        const text = e.target?.result as string
+        setAttachedFile({ name: file.name, content: text })
+     }
+     reader.readAsText(file)
+     
+     // Reset file input so the same file can be selected again later
+     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -82,61 +115,12 @@ export function ChatInput({
     }
   }
 
-  const toggleVoiceInput = () => {
-    if (isListening) {
-      recognitionRef.current?.stop()
-      setIsListening(false)
-      return
+  const toggleVoice = () => {
+    if (voice.isListening) {
+      voice.stopListening()
+    } else {
+      voice.startListening()
     }
-
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert('Voice input is not supported in your browser. Use Chrome or Edge.')
-      return
-    }
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    const recognition = new SpeechRecognition()
-    recognition.continuous = false // Stop after one sentence like ChatGPT
-    recognition.interimResults = true
-    recognition.lang = 'en-US'
-
-    let finalTranscript = ''
-
-    recognition.onresult = (event: any) => {
-      let interimTranscript = ''
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript
-        } else {
-          interimTranscript = transcript
-        }
-      }
-      // Show live transcript in textarea
-      setValue(finalTranscript + interimTranscript)
-    }
-
-    recognition.onerror = () => {
-      setIsListening(false)
-    }
-
-    recognition.onend = () => {
-      setIsListening(false)
-      // Auto-send when speech stops, like ChatGPT/Gemini
-      if (finalTranscript.trim()) {
-        setValue(finalTranscript.trim())
-        // Small delay so the user sees the final text before it sends
-        setTimeout(() => {
-          onSend(finalTranscript.trim(), selectedSkill?.id)
-          setValue('')
-          setSelectedSkill(null)
-        }, 300)
-      }
-    }
-
-    recognitionRef.current = recognition
-    recognition.start()
-    setIsListening(true)
   }
 
   const handleSkillSelect = (skill: Skill) => {
@@ -146,8 +130,6 @@ export function ChatInput({
   }
 
   const isWelcome = variant === 'welcome'
-
-  // Group skills by category
   const createSkills = SKILLS.filter(s => s.category === 'create')
   const toolSkills = SKILLS.filter(s => s.category === 'tools')
   const memorySkills = SKILLS.filter(s => s.category === 'memory')
@@ -155,13 +137,13 @@ export function ChatInput({
   return (
     <div className={cn(
       'relative transition-colors',
-      isWelcome 
-        ? 'rounded-xl border-2 border-dashed border-border focus-within:border-zero-300/50' 
+      isWelcome
+        ? 'rounded-xl border-2 border-dashed border-border focus-within:border-zero-300/50'
         : 'rounded-2xl border border-border bg-bg-2 focus-within:border-zero-300/50'
     )}>
-      {/* Selected skill indicator */}
-      {selectedSkill && (
-        <div className="flex items-center gap-2 px-4 pt-3">
+      {/* Top Indicators Row */}
+      <div className="flex flex-wrap gap-2 px-4 pt-3 empty:hidden">
+        {selectedSkill && (
           <span className="flex items-center gap-1.5 rounded-full bg-zero-300/20 px-2.5 py-1 text-xs font-medium text-zero-300">
             {skillIcons[selectedSkill.id]}
             {selectedSkill.name}
@@ -172,8 +154,21 @@ export function ChatInput({
               <X className="h-3 w-3" />
             </button>
           </span>
-        </div>
-      )}
+        )}
+        
+        {attachedFile && (
+          <span className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-500 border border-emerald-500/20">
+            <FileText className="h-3.5 w-3.5" />
+            <span className="max-w-[120px] truncate">{attachedFile.name}</span>
+            <button
+              onClick={() => setAttachedFile(null)}
+              className="ml-1 rounded-full p-0.5 hover:bg-emerald-500/20"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        )}
+      </div>
 
       {/* Textarea */}
       <div className={cn(
@@ -188,7 +183,7 @@ export function ChatInput({
           placeholder={selectedSkill ? `${selectedSkill.description}...` : placeholder}
           rows={1}
           className={cn(
-            'w-full resize-none bg-transparent text-base text-text-1 placeholder:text-text-3 focus:outline-none pr-12 line-height-1.5',
+            'w-full resize-none bg-transparent text-base text-text-1 placeholder:text-text-3 focus:outline-none pr-12',
             isWelcome && 'text-lg'
           )}
           style={{
@@ -205,13 +200,31 @@ export function ChatInput({
         isWelcome ? 'pt-4' : 'pt-2'
       )}>
         <div className="relative flex items-center gap-1" ref={skillsRef}>
+          {/* Hidden File Input */}
+          <input 
+             type="file" 
+             ref={fileInputRef} 
+             onChange={handleFileChange} 
+             className="hidden" 
+             accept=".txt,.md,.js,.ts,.jsx,.tsx,.py,.csv,.json,.html,.css"
+          />
+
+          {/* Add file button */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="rounded-lg p-2 transition-colors text-text-3 hover:bg-bg-3 hover:text-text-2 group relative"
+            aria-label="Upload file"
+          >
+            <Paperclip className="h-5 w-5" />
+          </button>
+
           {/* Add skill button */}
           <button
             onClick={() => setShowSkills(!showSkills)}
             className={cn(
               'rounded-lg p-2 transition-colors',
-              showSkills 
-                ? 'bg-zero-300/20 text-zero-300' 
+              showSkills
+                ? 'bg-zero-300/20 text-zero-300'
                 : 'text-text-3 hover:bg-bg-3 hover:text-text-2'
             )}
             aria-label="Add skill"
@@ -221,19 +234,19 @@ export function ChatInput({
 
           {/* Skills dropdown */}
           {showSkills && (
-            <div className="absolute bottom-full left-0 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-bg-1 shadow-xl">
+            <div className="absolute bottom-full left-0 mb-2 w-64 overflow-hidden rounded-xl border border-border bg-bg-1 shadow-xl z-50">
               <div className="p-2">
                 <p className="px-2 py-1.5 text-xs font-medium text-text-3">Create</p>
                 {createSkills.map((skill) => (
                   <SkillItem key={skill.id} skill={skill} icon={skillIcons[skill.id]} onSelect={handleSkillSelect} />
                 ))}
-                
+
                 <div className="my-1 h-px bg-border" />
                 <p className="px-2 py-1.5 text-xs font-medium text-text-3">Tools</p>
                 {toolSkills.map((skill) => (
                   <SkillItem key={skill.id} skill={skill} icon={skillIcons[skill.id]} onSelect={handleSkillSelect} />
                 ))}
-                
+
                 <div className="my-1 h-px bg-border" />
                 <p className="px-2 py-1.5 text-xs font-medium text-text-3">Memory</p>
                 {memorySkills.map((skill) => (
@@ -254,30 +267,32 @@ export function ChatInput({
           />
 
           {/* Voice input */}
-          <button
-            onClick={toggleVoiceInput}
-            className={cn(
-              'flex items-center justify-center rounded-lg p-2 transition-colors',
-              isListening
-                ? 'bg-red-500/10 text-red-500'
-                : 'text-text-3 hover:bg-bg-3 hover:text-text-2'
-            )}
-            aria-label={isListening ? 'Stop listening' : 'Start voice input'}
-          >
-            {isListening ? (
-              <VoiceIndicator isActive />
-            ) : (
-              <Mic className="h-5 w-5" />
-            )}
-          </button>
+          {voice.voiceSupported && (
+            <button
+              onClick={toggleVoice}
+              className={cn(
+                'flex items-center justify-center rounded-lg p-2 transition-colors',
+                voice.isListening
+                  ? 'bg-red-500/10 text-red-500'
+                  : 'text-text-3 hover:bg-bg-3 hover:text-text-2'
+              )}
+              aria-label={voice.isListening ? 'Stop listening' : 'Start voice input'}
+            >
+              {voice.isListening ? (
+                <VoiceIndicator isActive />
+              ) : (
+                <Mic className="h-5 w-5" />
+              )}
+            </button>
+          )}
 
           {/* Send button */}
           <button
             onClick={handleSubmit}
-            disabled={!value.trim() || isLoading}
+            disabled={(!value.trim() && !attachedFile) || isLoading}
             className={cn(
               'ml-2 flex h-10 w-10 items-center justify-center rounded-full transition-all',
-              !value.trim() || isLoading
+              (!value.trim() && !attachedFile) || isLoading
                 ? 'bg-bg-3 text-text-3 opacity-50 cursor-not-allowed'
                 : 'bg-zero-300 text-white hover:bg-zero-400 shadow-lg hover:shadow-xl'
             )}
@@ -292,14 +307,14 @@ export function ChatInput({
   )
 }
 
-function SkillItem({ 
-  skill, 
-  icon, 
-  onSelect 
-}: { 
+function SkillItem({
+  skill,
+  icon,
+  onSelect
+}: {
   skill: Skill
   icon: React.ReactNode
-  onSelect: (skill: Skill) => void 
+  onSelect: (skill: Skill) => void
 }) {
   return (
     <button

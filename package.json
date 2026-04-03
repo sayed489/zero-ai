@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
+    "dev:https": "next dev --experimental-https -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
     "lint": "eslint ."
@@ -11,6 +12,7 @@
   "dependencies": {
     "@codesandbox/sandpack-react": "^2.20.0",
     "@codesandbox/sandpack-themes": "^2.0.21",
+    "@datastax/astra-db-ts": "^2.2.1",
     "@hookform/resolvers": "^3.9.1",
     "@mlc-ai/web-llm": "^0.2.82",
     "@radix-ui/react-accordion": "1.2.12",

@@ -16,7 +16,8 @@ import {
   ArrowUpCircle,
   Gift,
   LogOut,
-  Layers
+  Layers,
+  Compass
 } from 'lucide-react'
 import { ZeroMascot } from '@/components/mascot/zero-mascot'
 import { ChatHistory } from '@/components/sidebar/chat-history'
@@ -34,7 +35,7 @@ export function Sidebar({ className, onNewChat }: SidebarProps) {
     { icon: MessageSquare, label: 'Chats', href: '/chat' },
     { icon: FolderOpen, label: 'Projects', href: '/projects' },
     { icon: Sparkles, label: 'Artifacts', href: '/artifacts' },
-    { icon: Code2, label: 'Code', href: '/code' },
+    { icon: Compass, label: 'Explore', href: '/explore' },
   ]
 
   return (
@@ -68,6 +69,10 @@ export function Sidebar({ className, onNewChat }: SidebarProps) {
           New chat
         </button>
         <button
+          onClick={() => {
+            const query = window.prompt("Search conversations or ask Zero:")
+            if(query && query.trim()) window.location.href = `/chat?q=${encodeURIComponent(query)}`
+          }}
           className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-2 transition-colors hover:bg-bg-2 hover:text-text-1"
         >
           <Search className="h-4 w-4" />
@@ -144,8 +149,8 @@ export function Sidebar({ className, onNewChat }: SidebarProps) {
             <button
               className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-text-2 transition-colors hover:bg-bg-3 hover:text-text-1"
             >
-              <Gift className="h-4 w-4" />
-              Gift Zero
+              <Code2 className="h-4 w-4" />
+              Developer API
             </button>
             <div className="my-1 h-px bg-border" />
             <button

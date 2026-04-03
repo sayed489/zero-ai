@@ -1,15 +1,48 @@
 import { redis } from "@/lib/redis"
 import { PROVIDERS } from "./configs"
 import { Message, ProviderConfig, StreamChunk } from "./types"
+import {
+  siliconFlowRotator,
+  geminiFlashRotator,
+  fireworksRotator,
+  cerebrasRotator,
+  githubRotator,
+  openrouterRotator,
+} from "@/lib/key-rotation"
+
+const TIMEOUT_MS = 5000 // Very fast timeout so fallbacks trigger instantly if a provider is stalled
+
+// Map provider id prefix → rotator for markKeyFailed
+function getRotatorForProvider(id: string) {
+  if (id.startsWith("siliconflow")) return siliconFlowRotator
+  if (id.startsWith("gemini")) return geminiFlashRotator
+  if (id.startsWith("fireworks")) return fireworksRotator
+  if (id.startsWith("cerebras")) return cerebrasRotator
+  if (id.startsWith("github")) return githubRotator
+  if (id.startsWith("openrouter")) return openrouterRotator
+  return null
+}
 
 export async function getAvailableProviders(tier: string): Promise<ProviderConfig[]> {
   const providers = PROVIDERS[tier] || []
-  const statuses = await Promise.all(
-    providers.map((p) => redis.get(`provider:${p.id}:status`))
-  )
-  return providers
-    .filter((p, i) => statuses[i] !== "exhausted" && statuses[i] !== "down")
-    .sort((a, b) => a.priority - b.priority)
+  let available = providers
+
+  // 1. Filter out unconfigured providers (missing keys)
+  available = available.filter(p => !!p.apiKey && !p.apiKey.startsWith('your-'))
+
+  // 2. Filter out Redis-marked exhausted/down providers (best effort)
+  try {
+    const statuses = await Promise.all(
+      available.map((p) => redis.get(`provider:${p.id}:status`))
+    )
+    available = available.filter(
+      (_, i) => statuses[i] !== "exhausted" && statuses[i] !== "down"
+    )
+  } catch {
+    // Redis not configured or fails — proceed with filtered available
+  }
+
+  return available.sort((a, b) => a.priority - b.priority)
 }
 
 export async function streamWithFallback(
@@ -22,11 +55,19 @@ export async function streamWithFallback(
   return new ReadableStream({
     async start(controller) {
       const encode = (chunk: StreamChunk) =>
-        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`))
+        controller.enqueue(
+          new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`)
+        )
+
+      let succeeded = false
 
       for (const provider of providers) {
         try {
-          encode({ type: "provider_switch", provider: provider.name, model: provider.model })
+          encode({
+            type: "provider_switch",
+            provider: provider.name,
+            model: provider.model,
+          })
 
           const stream = callProvider(provider, messages, systemPrompt)
 
@@ -36,29 +77,44 @@ export async function streamWithFallback(
 
           encode({ type: "done", provider: provider.name, model: provider.model })
 
-          await redis.set(`provider:${provider.id}:status`, "ok")
-          await redis.incr(`provider:${provider.id}:success_count`)
-          controller.close()
-          return
+          // Mark success in Redis (best-effort)
+          try {
+            await redis.set(`provider:${provider.id}:status`, "ok")
+          } catch { }
+
+          succeeded = true
+          break
         } catch (err: any) {
-          console.error(`Provider ${provider.id} failed:`, err.message)
+          console.error(`[router] Provider ${provider.id} failed:`, err.message)
 
+          const rotator = getRotatorForProvider(provider.id)
           if (err.status === 429) {
-            await redis.set(`provider:${provider.id}:status`, "exhausted", { ex: 3600 })
+            rotator?.markKeyFailed(provider.apiKey)
+            try {
+              await redis.set(`provider:${provider.id}:status`, "exhausted", { ex: 3600 })
+            } catch { }
           } else if (err.status >= 500) {
-            await redis.set(`provider:${provider.id}:status`, "down", { ex: 300 })
+            try {
+              await redis.set(`provider:${provider.id}:status`, "down", { ex: 300 })
+            } catch { }
           }
-
-          await redis.incr(`provider:${provider.id}:error_count`)
-          continue
+          // Continue to next provider
         }
       }
 
-      encode({ type: "error", error: "All providers temporarily unavailable. Try again in a moment." })
+      if (!succeeded) {
+        encode({
+          type: "error",
+          error: "Zero is experiencing high demand. All providers busy — try again in a moment.",
+        })
+      }
+
       controller.close()
     },
   })
 }
+
+// ─── Provider caller ──────────────────────────────────────────────────────────
 
 async function* callProvider(
   provider: ProviderConfig,
@@ -74,12 +130,7 @@ async function* callProvider(
     return
   }
 
-  // Dynamic HF spaces handling using sequentially active space from Redis
-  if (provider.endpoint === "dynamic" && provider.id.startsWith("hf-")) {
-    yield* callHFSpace(provider, allMessages)
-    return
-  }
-
+  // OpenAI-compatible (SiliconFlow, Fireworks, Cerebras, OpenRouter, GitHub Models)
   const res = await fetch(provider.endpoint, {
     method: "POST",
     headers: {
@@ -87,46 +138,59 @@ async function* callProvider(
       Authorization: `Bearer ${provider.apiKey}`,
     },
     body: JSON.stringify({
-      model: provider.model, // Correctly requests Qwen2.5-7B Instruct or similar 
+      model: provider.model,
       messages: allMessages,
       max_tokens: provider.maxTokens,
       stream: true,
       temperature: 0.7,
     }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   })
 
   if (!res.ok) {
-    const err: any = new Error(`${provider.id} error: ${res.status}`)
+    const err: any = new Error(`${provider.id}: HTTP ${res.status}`)
     err.status = res.status
     throw err
   }
 
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
+  let buffer = ""
 
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
-    const lines = decoder.decode(value).split("\n")
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
     for (const line of lines) {
       if (!line.startsWith("data: ") || line === "data: [DONE]") continue
       try {
         const json = JSON.parse(line.slice(6))
         const token = json.choices?.[0]?.delta?.content
         if (token) yield token
-      } catch {}
+      } catch { }
     }
   }
 }
 
-async function* callGemini(provider: ProviderConfig, messages: Message[]): AsyncGenerator<string> {
+async function* callGemini(
+  provider: ProviderConfig,
+  messages: Message[]
+): AsyncGenerator<string> {
   const url = `${provider.endpoint}?key=${provider.apiKey}&alt=sse`
   const contents = messages
     .filter((m) => m.role !== "system")
     .map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: typeof m.content === "string" ? m.content : (m.content as any)[0]?.text || "" }],
+      parts: [
+        {
+          text:
+            typeof m.content === "string"
+              ? m.content
+              : (m.content as any)[0]?.text || "",
+        },
+      ],
     }))
   const systemInstruction = messages.find((m) => m.role === "system")?.content
 
@@ -136,70 +200,45 @@ async function* callGemini(provider: ProviderConfig, messages: Message[]): Async
     body: JSON.stringify({
       contents,
       ...(systemInstruction && {
-        systemInstruction: { parts: [{ text: systemInstruction }] },
+        systemInstruction: {
+          parts: [
+            {
+              text:
+                typeof systemInstruction === "string"
+                  ? systemInstruction
+                  : "",
+            },
+          ],
+        },
       }),
       generationConfig: { maxOutputTokens: provider.maxTokens },
     }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   })
 
   if (!res.ok) {
-    const err: any = new Error(`Gemini error: ${res.status}`)
+    const err: any = new Error(`Gemini ${provider.model}: HTTP ${res.status}`)
     err.status = res.status
     throw err
   }
 
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
+  let buffer = ""
+
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
-    const lines = decoder.decode(value).split("\n")
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue
       try {
         const json = JSON.parse(line.slice(6))
         const token = json.candidates?.[0]?.content?.parts?.[0]?.text
         if (token) yield token
-      } catch {}
+      } catch { }
     }
-  }
-}
-
-async function* callHFSpace(provider: ProviderConfig, messages: Message[]): AsyncGenerator<string> {
-  const activeSpace = await redis.get(`hf:${provider.tier}:current`) as string
-  if (!activeSpace) throw new Error("No HF space active for tier " + provider.tier)
-
-  const status = await redis.get(`hf:space:${activeSpace}:status`)
-  if (status === "sleeping" || status === "waking") {
-    throw Object.assign(new Error("HF space sleeping"), { status: 503 })
-  }
-
-  const endpoint = `https://${activeSpace.replace("/", "-")}.hf.space/api/predict`
-  const lastMessage = messages[messages.length - 1]
-  const prompt = typeof lastMessage.content === "string" ? lastMessage.content : ""
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(provider.apiKey && { Authorization: `Bearer ${provider.apiKey}` }),
-    },
-    body: JSON.stringify({ data: [prompt, "", 512, 0.7, 0.95] }),
-    signal: AbortSignal.timeout(60000), // Longer timeout for HF Spaces
-  })
-
-  if (!res.ok) {
-    const err: any = new Error(`HF error on space ${activeSpace}: ${res.status}`)
-    err.status = res.status
-    throw err
-  }
-
-  const json = await res.json()
-  const text = json.data?.[0] || ""
-  const words = text.split(" ")
-  for (const word of words) {
-    yield word + " "
-    await new Promise((r) => setTimeout(r, 20)) // Simulates streaming effectively
   }
 }
