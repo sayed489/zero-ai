@@ -2,6 +2,11 @@ import { createServerClient } from "@supabase/ssr"
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
+// Check if Supabase is configured
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey)
+
 export async function middleware(req: NextRequest) {
   let res = NextResponse.next({
     request: {
@@ -9,16 +14,21 @@ export async function middleware(req: NextRequest) {
     },
   })
 
+  // If Supabase isn't configured, skip auth checks but allow access
+  if (!isSupabaseConfigured) {
+    return res
+  }
+
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl!,
+    supabaseAnonKey!,
     {
       cookies: {
         getAll() {
           return req.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => req.cookies.set(name, value))
+          cookiesToSet.forEach(({ name, value }) => req.cookies.set(name, value))
           res = NextResponse.next({
             request: {
               headers: req.headers,
@@ -61,4 +71,3 @@ export const config = {
     "/api/memory/:path*",
   ],
 }
-

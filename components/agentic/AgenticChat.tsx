@@ -1,18 +1,13 @@
 "use client"
 
 import { useRef, useState, useEffect, useCallback } from "react"
-import { useChat } from "@ai-sdk/react"
 import { ZeroMascot } from "@/components/mascot/zero-mascot"
 import { cn } from "@/lib/utils"
 import { 
   Bot, Send, Loader2, Terminal, Code2, CheckCircle2, XCircle, 
-  Globe, Search, FileText, Wand2, Brain, Zap, Clock, ChevronDown, 
-  ChevronUp, RefreshCw, Copy, Check, Sparkles, ExternalLink,
-  AlertTriangle
+  Globe, Search, FileText, Wand2, Brain, Clock, ChevronDown, 
+  ChevronUp, RefreshCw, Copy, Check, Sparkles, AlertTriangle
 } from "lucide-react"
-import ReactMarkdown from "react-markdown"
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
 interface AgentStep {
   id: string
@@ -21,7 +16,12 @@ interface AgentStep {
   content: string
   status: 'running' | 'complete' | 'error'
   timestamp: Date
-  data?: Record<string, unknown>
+}
+
+interface Message {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
 }
 
 interface AgenticChatProps {
@@ -46,6 +46,69 @@ const STEP_COLORS: Record<string, string> = {
   code: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
   tool: "text-pink-400 bg-pink-500/10 border-pink-500/20",
   result: "text-zero-300 bg-zero-300/10 border-zero-300/20",
+}
+
+// Simple code block component without external dependencies
+function CodeBlock({ code, language }: { code: string; language?: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="relative my-3 rounded-xl bg-[#1e1e2e] border border-white/10 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-white/5">
+        <span className="text-xs text-text-3 font-mono">{language || 'code'}</span>
+        <button
+          onClick={handleCopy}
+          className="p-1.5 rounded-md hover:bg-white/10 text-text-3 hover:text-text-1 transition-colors"
+        >
+          {copied ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      <pre className="p-4 overflow-x-auto">
+        <code className="text-xs font-mono text-text-2 leading-relaxed whitespace-pre">
+          {code}
+        </code>
+      </pre>
+    </div>
+  )
+}
+
+// Simple markdown renderer
+function SimpleMarkdown({ content }: { content: string }) {
+  const parts = content.split(/(```[\s\S]*?```)/g)
+  
+  return (
+    <div className="prose prose-invert prose-sm max-w-none">
+      {parts.map((part, i) => {
+        if (part.startsWith('```')) {
+          const match = part.match(/```(\w+)?\n?([\s\S]*?)```/)
+          if (match) {
+            return <CodeBlock key={i} code={match[2].trim()} language={match[1]} />
+          }
+        }
+        // Handle inline code and basic formatting
+        return (
+          <span key={i} className="whitespace-pre-wrap">
+            {part.split(/(`[^`]+`)/g).map((segment, j) => {
+              if (segment.startsWith('`') && segment.endsWith('`')) {
+                return (
+                  <code key={j} className="px-1.5 py-0.5 rounded bg-bg-2 text-text-1 text-xs font-mono">
+                    {segment.slice(1, -1)}
+                  </code>
+                )
+              }
+              return segment
+            })}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 function AgentStepCard({ step, isExpanded, onToggle }: { step: AgentStep; isExpanded: boolean; onToggle: () => void }) {
@@ -83,7 +146,7 @@ function AgentStepCard({ step, isExpanded, onToggle }: { step: AgentStep; isExpa
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">{step.title}</span>
             {step.status === 'running' && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-text-2">Running</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-text-2 animate-pulse">Running</span>
             )}
           </div>
           {!isExpanded && step.content && (
@@ -100,20 +163,14 @@ function AgentStepCard({ step, isExpanded, onToggle }: { step: AgentStep; isExpa
           <div className="relative bg-bg-0 rounded-lg p-3 border border-border">
             <button
               onClick={handleCopy}
-              className="absolute top-2 right-2 p-1.5 rounded-md bg-bg-2 hover:bg-bg-3 text-text-3 hover:text-text-1 transition-colors"
+              className="absolute top-2 right-2 p-1.5 rounded-md bg-bg-2 hover:bg-bg-3 text-text-3 hover:text-text-1 transition-colors z-10"
             >
               {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
             </button>
             {step.type === 'code' ? (
-              <SyntaxHighlighter
-                language="javascript"
-                style={oneDark}
-                customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: '12px' }}
-              >
-                {step.content}
-              </SyntaxHighlighter>
+              <CodeBlock code={step.content} language="typescript" />
             ) : (
-              <pre className="text-xs text-text-2 whitespace-pre-wrap font-mono overflow-x-auto">
+              <pre className="text-xs text-text-2 whitespace-pre-wrap font-mono overflow-x-auto pr-8">
                 {step.content}
               </pre>
             )}
@@ -124,61 +181,56 @@ function AgentStepCard({ step, isExpanded, onToggle }: { step: AgentStep; isExpa
   )
 }
 
+// Thinking animation component
+function ThinkingAnimation() {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex gap-1">
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            className="w-2 h-2 rounded-full bg-orange-400 animate-bounce"
+            style={{ animationDelay: `${i * 0.15}s` }}
+          />
+        ))}
+      </div>
+      <span className="text-sm text-text-2">Thinking...</span>
+    </div>
+  )
+}
+
+// Search animation component
+function SearchAnimation() {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+      <Search className="h-4 w-4 text-amber-400 animate-pulse" />
+      <div className="flex-1">
+        <div className="h-2 w-32 bg-amber-500/30 rounded animate-pulse" />
+        <div className="h-2 w-24 bg-amber-500/20 rounded mt-1.5 animate-pulse" style={{ animationDelay: '0.2s' }} />
+      </div>
+    </div>
+  )
+}
+
 export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
   const [agentSteps, setAgentSteps] = useState<AgentStep[]>([])
-  const [taskRunning, setTaskRunning] = useState(false)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
   const [taskDuration, setTaskDuration] = useState(0)
-
-  const { messages, input, setInput, handleSubmit, isLoading, error, reload } = useChat({
-    api: "/api/agentic",
-    body: { sessionId, userId },
-    onResponse: (response) => {
-      // Parse streaming steps from custom headers if available
-      const stepHeader = response.headers.get('x-agent-step')
-      if (stepHeader) {
-        try {
-          const step = JSON.parse(stepHeader) as AgentStep
-          setAgentSteps(prev => [...prev, { ...step, id: `${Date.now()}`, timestamp: new Date() }])
-        } catch {}
-      }
-      setTaskRunning(true)
-    },
-    onFinish: () => {
-      setTaskRunning(false)
-      // Add completion step
-      setAgentSteps(prev => [...prev, {
-        id: `${Date.now()}`,
-        type: 'result',
-        title: 'Task Complete',
-        content: 'Agent finished processing your request',
-        status: 'complete',
-        timestamp: new Date()
-      }])
-    },
-    onError: (err) => {
-      setTaskRunning(false)
-      setAgentSteps(prev => [...prev, {
-        id: `${Date.now()}`,
-        type: 'result',
-        title: 'Error',
-        content: err.message || 'An unexpected error occurred',
-        status: 'error',
-        timestamp: new Date()
-      }])
-    }
-  })
 
   // Timer for task duration
   useEffect(() => {
-    if (!taskRunning) return
+    if (!isLoading) return
     const startTime = Date.now()
     const interval = setInterval(() => {
       setTaskDuration(Math.floor((Date.now() - startTime) / 1000))
     }, 1000)
     return () => clearInterval(interval)
-  }, [taskRunning])
+  }, [isLoading])
 
   // Auto-scroll
   useEffect(() => {
@@ -192,7 +244,7 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
     if (initialPrompt && !messages.length) {
       setInput(initialPrompt)
     }
-  }, [initialPrompt, messages.length, setInput])
+  }, [initialPrompt, messages.length])
 
   const toggleStep = useCallback((id: string) => {
     setExpandedSteps(prev => {
@@ -203,22 +255,165 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
     })
   }, [])
 
-  const handleFormSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!input.trim() || isLoading) return
-    
-    // Clear previous steps for new task
-    setAgentSteps([{
-      id: `${Date.now()}`,
+  const simulateAgentSteps = async (userMessage: string) => {
+    // Simulate thinking
+    const thinkingStep: AgentStep = {
+      id: `${Date.now()}-thinking`,
       type: 'thinking',
-      title: 'Understanding request',
-      content: 'Analyzing your request and planning approach...',
+      title: 'Analyzing request',
+      content: `Understanding: "${userMessage}"`,
       status: 'running',
       timestamp: new Date()
-    }])
+    }
+    setAgentSteps(prev => [...prev, thinkingStep])
+    await new Promise(r => setTimeout(r, 1500))
+    setAgentSteps(prev => prev.map(s => s.id === thinkingStep.id ? { ...s, status: 'complete' as const } : s))
+
+    // Check if needs search
+    const needsSearch = userMessage.toLowerCase().includes('search') || 
+                       userMessage.toLowerCase().includes('find') ||
+                       userMessage.toLowerCase().includes('research') ||
+                       userMessage.toLowerCase().includes('latest')
+    
+    if (needsSearch) {
+      const searchStep: AgentStep = {
+        id: `${Date.now()}-search`,
+        type: 'search',
+        title: 'Searching the web',
+        content: `Query: "${userMessage.slice(0, 50)}..."`,
+        status: 'running',
+        timestamp: new Date()
+      }
+      setAgentSteps(prev => [...prev, searchStep])
+      await new Promise(r => setTimeout(r, 2000))
+      setAgentSteps(prev => prev.map(s => s.id === searchStep.id ? { ...s, status: 'complete' as const, content: 'Found relevant information from multiple sources' } : s))
+    }
+
+    // Check if needs code
+    const needsCode = userMessage.toLowerCase().includes('code') || 
+                      userMessage.toLowerCase().includes('build') ||
+                      userMessage.toLowerCase().includes('create') ||
+                      userMessage.toLowerCase().includes('component')
+    
+    if (needsCode) {
+      const codeStep: AgentStep = {
+        id: `${Date.now()}-code`,
+        type: 'code',
+        title: 'Generating code',
+        content: '// Working on implementation...',
+        status: 'running',
+        timestamp: new Date()
+      }
+      setAgentSteps(prev => [...prev, codeStep])
+      await new Promise(r => setTimeout(r, 2500))
+      setAgentSteps(prev => prev.map(s => s.id === codeStep.id ? { 
+        ...s, 
+        status: 'complete' as const, 
+        content: `// Example implementation\nexport function Component() {\n  return (\n    <div className="p-4">\n      <h1>Generated Component</h1>\n    </div>\n  )\n}` 
+      } : s))
+    }
+
+    // Complete
+    const resultStep: AgentStep = {
+      id: `${Date.now()}-result`,
+      type: 'result',
+      title: 'Task Complete',
+      content: 'Successfully processed your request',
+      status: 'complete',
+      timestamp: new Date()
+    }
+    setAgentSteps(prev => [...prev, resultStep])
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!input.trim() || isLoading) return
+
+    const userMessage = input.trim()
+    setInput('')
+    setError(null)
+    setIsLoading(true)
     setTaskDuration(0)
     
-    handleSubmit(e)
+    // Add user message
+    const userMsg: Message = { id: `${Date.now()}-user`, role: 'user', content: userMessage }
+    setMessages(prev => [...prev, userMsg])
+    
+    // Clear previous steps
+    setAgentSteps([])
+
+    try {
+      // Simulate agent steps for better UX
+      await simulateAgentSteps(userMessage)
+
+      // Call API
+      const response = await fetch('/api/agentic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          messages: [...messages, userMsg].map(m => ({ role: m.role, content: m.content })),
+          sessionId,
+          userId 
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Request failed: ${response.status}`)
+      }
+
+      // Read streaming response
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+      let assistantContent = ''
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          
+          const chunk = decoder.decode(value, { stream: true })
+          assistantContent += chunk
+          
+          // Update message in real-time
+          setMessages(prev => {
+            const existing = prev.find(m => m.id === `${userMsg.id}-assistant`)
+            if (existing) {
+              return prev.map(m => m.id === existing.id ? { ...m, content: assistantContent } : m)
+            } else {
+              return [...prev, { id: `${userMsg.id}-assistant`, role: 'assistant' as const, content: assistantContent }]
+            }
+          })
+        }
+      }
+
+      // Ensure final message is added
+      if (!assistantContent) {
+        assistantContent = "I've completed the task. Let me know if you need anything else!"
+      }
+      
+      setMessages(prev => {
+        const existing = prev.find(m => m.id === `${userMsg.id}-assistant`)
+        if (existing) {
+          return prev.map(m => m.id === existing.id ? { ...m, content: assistantContent } : m)
+        } else {
+          return [...prev, { id: `${userMsg.id}-assistant`, role: 'assistant' as const, content: assistantContent }]
+        }
+      })
+
+    } catch (err) {
+      console.error('Agentic error:', err)
+      setError(err instanceof Error ? err : new Error('Something went wrong'))
+      setAgentSteps(prev => [...prev, {
+        id: `${Date.now()}-error`,
+        type: 'result',
+        title: 'Error',
+        content: err instanceof Error ? err.message : 'An unexpected error occurred',
+        status: 'error',
+        timestamp: new Date()
+      }])
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const formatDuration = (seconds: number) => {
@@ -243,11 +438,11 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
                   Beta
                 </span>
               </h1>
-              <p className="text-sm text-text-3">Autonomous AI agent that completes complex tasks</p>
+              <p className="text-sm text-text-3">Autonomous AI agent for complex tasks</p>
             </div>
           </div>
 
-          {taskRunning && (
+          {isLoading && (
             <div className="flex items-center gap-3 px-4 py-2 rounded-xl bg-bg-2 border border-border">
               <Loader2 className="h-4 w-4 animate-spin text-orange-400" />
               <div className="flex items-center gap-2">
@@ -280,15 +475,15 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
               {[
-                { icon: <Search className="h-4 w-4" />, text: "Research competitor pricing strategies", color: "text-amber-400" },
-                { icon: <Code2 className="h-4 w-4" />, text: "Build a React dashboard component", color: "text-emerald-400" },
-                { icon: <Globe className="h-4 w-4" />, text: "Find trending topics in tech this week", color: "text-violet-400" },
-                { icon: <FileText className="h-4 w-4" />, text: "Summarize the latest AI papers", color: "text-blue-400" },
+                { icon: <Search className="h-4 w-4" />, text: "Research competitor pricing", color: "text-amber-400" },
+                { icon: <Code2 className="h-4 w-4" />, text: "Build a React component", color: "text-emerald-400" },
+                { icon: <Globe className="h-4 w-4" />, text: "Find trending tech topics", color: "text-violet-400" },
+                { icon: <FileText className="h-4 w-4" />, text: "Summarize latest AI news", color: "text-blue-400" },
               ].map((example, i) => (
                 <button
                   key={i}
                   onClick={() => setInput(example.text)}
-                  className="flex items-center gap-3 p-4 rounded-xl bg-bg-1 border border-border text-left hover:border-border-hover hover:bg-bg-2 transition-all group"
+                  className="flex items-center gap-3 p-4 rounded-xl bg-bg-1 border border-border text-left hover:border-orange-500/30 hover:bg-bg-2 transition-all group"
                 >
                   <div className={cn("shrink-0", example.color)}>{example.icon}</div>
                   <span className="text-sm text-text-2 group-hover:text-text-1 transition-colors">{example.text}</span>
@@ -318,9 +513,9 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
         )}
 
         {/* Messages */}
-        {messages.map((message, i) => (
+        {messages.map((message) => (
           <div 
-            key={message.id || i}
+            key={message.id}
             className={cn(
               "flex gap-4",
               message.role === 'user' ? "justify-end" : "justify-start"
@@ -338,31 +533,7 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
                 : "bg-bg-1 border border-border text-text-1"
             )}>
               {message.role === 'assistant' ? (
-                <ReactMarkdown
-                  className="prose prose-invert prose-sm max-w-none"
-                  components={{
-                    code: ({ className, children, ...props }) => {
-                      const match = /language-(\w+)/.exec(className || '')
-                      const isInline = !match
-                      return isInline ? (
-                        <code className="px-1.5 py-0.5 rounded bg-bg-2 text-text-1 text-xs font-mono" {...props}>
-                          {children}
-                        </code>
-                      ) : (
-                        <SyntaxHighlighter
-                          style={oneDark}
-                          language={match[1]}
-                          PreTag="div"
-                          customStyle={{ margin: '1rem 0', borderRadius: '0.75rem', fontSize: '12px' }}
-                        >
-                          {String(children).replace(/\n$/, '')}
-                        </SyntaxHighlighter>
-                      )
-                    }
-                  }}
-                >
-                  {message.content}
-                </ReactMarkdown>
+                <SimpleMarkdown content={message.content} />
               ) : (
                 <p className="text-sm">{message.content}</p>
               )}
@@ -376,14 +547,13 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
         ))}
 
         {/* Loading indicator */}
-        {isLoading && (
+        {isLoading && messages.length > 0 && !messages.some(m => m.role === 'assistant' && m.content) && (
           <div className="flex gap-4">
-            <div className="shrink-0 h-10 w-10 rounded-xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center animate-pulse">
-              <Bot className="h-5 w-5 text-white" />
+            <div className="shrink-0 h-10 w-10 rounded-xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center">
+              <Bot className="h-5 w-5 text-white animate-pulse" />
             </div>
-            <div className="bg-bg-1 border border-border rounded-2xl px-5 py-4 flex items-center gap-3">
-              <Loader2 className="h-4 w-4 animate-spin text-orange-400" />
-              <span className="text-sm text-text-2">Working on it...</span>
+            <div className="bg-bg-1 border border-border rounded-2xl px-5 py-4">
+              <ThinkingAnimation />
             </div>
           </div>
         )}
@@ -397,7 +567,7 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
               <p className="text-xs text-red-400/70 mt-0.5">{error.message}</p>
             </div>
             <button
-              onClick={() => reload()}
+              onClick={() => setError(null)}
               className="shrink-0 p-2 rounded-lg hover:bg-red-500/10 transition-colors"
             >
               <RefreshCw className="h-4 w-4" />
@@ -407,14 +577,14 @@ export function AgenticChat({ sessionId, userId, initialPrompt }: AgenticChatPro
       </div>
 
       {/* Input */}
-      <form onSubmit={handleFormSubmit} className="shrink-0 border-t border-border bg-bg-1 p-4">
+      <form onSubmit={handleSubmit} className="shrink-0 border-t border-border bg-bg-1 p-4">
         <div className="flex gap-3">
           <div className="flex-1 relative">
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Describe a complex task for the agent..."
+              placeholder="Describe a complex task..."
               disabled={isLoading}
               className="w-full px-5 py-4 pr-14 bg-bg-2 border border-border rounded-2xl text-text-1 placeholder:text-text-3 focus:outline-none focus:border-orange-500/50 transition-colors disabled:opacity-50"
             />

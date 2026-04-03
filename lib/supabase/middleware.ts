@@ -1,14 +1,24 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+// Check if Supabase is configured
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey)
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   })
 
+  // If Supabase isn't configured, allow all access
+  if (!isSupabaseConfigured) {
+    return supabaseResponse
+  }
+
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl!,
+    supabaseAnonKey!,
     {
       cookies: {
         getAll() {
@@ -33,17 +43,7 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Protect the /chat route - redirect to login if not authenticated
-  if (
-    request.nextUrl.pathname.startsWith('/chat') &&
-    !user
-  ) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/auth/login'
-    return NextResponse.redirect(url)
-  }
-
-  // Protect settings route
+  // Protect settings route only (chat is now free to access)
   if (
     request.nextUrl.pathname.startsWith('/settings') &&
     !user
