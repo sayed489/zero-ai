@@ -5,17 +5,25 @@ import { type WebWorkerMLCEngine, prebuiltAppConfig } from "@mlc-ai/web-llm"
 
 export type NanoStatus = "unavailable" | "checking" | "loading" | "ready" | "error"
 
-// ─── PICO INTELLIGENCE (Qwen 2.5 Coder 1.5B - 4-bit - 1.1GB) ───────────
-const PICO_MODEL = "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC" 
-const PICO_MODEL_URL = "https://huggingface.co/mlc-ai/Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC/resolve/main/"
+// ─── PICO INTELLIGENCE (Qwen 2.5 3B Instruct - 4-bit quantized - ~2GB) ───────
+// Upgraded from 1.5B to 3B for significantly better reasoning while staying fast
+const PICO_MODEL = "Qwen2.5-3B-Instruct-q4f16_1-MLC"
+const PICO_MODEL_URL = "https://huggingface.co/mlc-ai/Qwen2.5-3B-Instruct-q4f16_1-MLC/resolve/main/"
 
-const PICO_SYSTEM = `You are Zero Pico, a high-performance UI/UX engineer distilled from Qwen 2.5 Coder.
-Your goal is to generate high-end React code and assist with general chat.
-You have a 32,768 token context for deep analysis.
-Rules:
-- Minimal, premium Apple-level aesthetics.
-- Output ONLY code for syntax requests.
-- Conversational but precise for general chat.`
+const PICO_SYSTEM = `You are Zero Pico, an advanced on-device AI assistant powered by Qwen 2.5.
+You run entirely on the user's device - fast, private, and always available offline.
+
+CAPABILITIES:
+- General conversation and Q&A with high intelligence
+- Code generation, debugging, and explanation
+- Creative writing, analysis, and summarization
+- Math, logic, and reasoning tasks
+
+STYLE:
+- Be concise but thorough
+- Use markdown formatting for code blocks and lists
+- Be helpful, friendly, and direct
+- Never mention your model name or technical details to users`
 
 // ─── MODULE SINGLETONS (survive re-renders and HMR) ────────────────
 const _global = typeof window !== 'undefined' ? (window as any) : {}
@@ -125,7 +133,7 @@ export function useNano() {
     if (mountedRef.current) { 
       setStatus("loading")
       setProgress(0)
-      setStatusText("Igniting Qwen 2.5 Pico Engine...") 
+      setStatusText("Initializing on-device AI...") 
     }
 
     picoLoadPromise = (async () => {
@@ -160,9 +168,9 @@ export function useNano() {
               
               const mbMatch = report.text?.match(/(\d+\.?\d*)\/(\d+\.?\d*)MB/)
               if (mbMatch) {
-                setStatusText(`Syncing Qwen 2.5 Coder: ${mbMatch[1]} MB of ${mbMatch[2]} MB (${pct}%)`)
+                setStatusText(`Downloading: ${mbMatch[1]} / ${mbMatch[2]} MB (${pct}%)`)
               } else {
-                setStatusText(report.text ?? `Optimizing Qwen 2.5 Weights... ${pct}%`)
+                setStatusText(report.text ?? `Initializing... ${pct}%`)
               }
             }
           },
@@ -171,11 +179,11 @@ export function useNano() {
               {
                 "model_id": PICO_MODEL,
                 "model": PICO_MODEL_URL,
-                "model_lib": "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_80/Qwen2-1.5B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
-                "vram_required_MB": 1800, // Lean 1.1GB model + KV cache
-                "low_resource_required": true,
+                "model_lib": "https://raw.githubusercontent.com/user-attachments/assets/webgpu-models/Qwen2.5-3B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
+                "vram_required_MB": 2500, // 3B model with KV cache
+                "low_resource_required": false,
                 "overrides": {
-                  "context_window_size": 32768,
+                  "context_window_size": 8192, // Optimized for speed
                 }
               }
             ],
@@ -192,7 +200,7 @@ export function useNano() {
           setStatus("ready")
           setProgress(100)
           setCurrentModel(PICO_MODEL)
-          console.log("[Pico] Qwen 2.5 Coder active (2 Threads)")
+          console.log("[Pico] On-device AI ready")
           window.dispatchEvent(new CustomEvent("nano-loaded"))
         }
       } catch (err: any) {
@@ -225,7 +233,7 @@ export function useNano() {
       setProgress(100)
     } else {
       setStatus("unavailable")
-      setStatusText("Ready to sync Qwen 2.5 Coder")
+      setStatusText("Ready to download on-device AI")
     }
 
     return () => { 
@@ -246,9 +254,10 @@ export function useNano() {
         try {
           const stream = await picoEngine!.chat.completions.create({
             messages: [{ role: "system", content: PICO_SYSTEM }, ...messages],
-            temperature: 0.7,
-            max_tokens: 4096,
+            temperature: 0.6,
+            max_tokens: 2048,
             stream: true,
+            top_p: 0.9,
           })
 
           for await (const chunk of stream as any) {

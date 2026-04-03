@@ -4,198 +4,170 @@ import Link from 'next/link'
 import { ZeroMascot } from '@/components/mascot/zero-mascot'
 import {
   ArrowRight, Sparkles, Globe, Image as ImageIcon,
-  Code, Database, Zap, Mic, Wand2, Terminal, Rocket,
-  Brain, Cpu, Check
+  Code, Database, Zap, Mic, Wand2, Brain, Cpu, Check, Shield, Rocket
 } from 'lucide-react'
 
-// ─── Tier data ──────────────────────────────────────────────────────────────
+// AI Tiers - No model names exposed
 const TIERS = [
   {
     id: 'pico',
     name: 'Zero Pico',
-    sub: 'On-Device',
-    badge: { text: 'Always Free', cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' },
+    desc: 'On-device AI',
+    badge: 'Always Free',
+    badgeColor: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
     icon: <Cpu className="h-5 w-5 text-emerald-400" />,
-    glow: 'hover:border-emerald-500/30 hover:shadow-emerald-500/5',
+    glow: 'hover:border-emerald-500/30',
   },
   {
     id: 'nano',
     name: 'Zero Nano',
-    sub: '10/day free',
-    badge: { text: 'Free tier', cls: 'bg-blue-500/15 text-blue-400 border-blue-500/20' },
+    desc: 'Fast & capable',
+    badge: 'Free Tier',
+    badgeColor: 'bg-blue-500/15 text-blue-400 border-blue-500/20',
     icon: <Zap className="h-5 w-5 text-blue-400" />,
-    glow: 'hover:border-blue-500/30 hover:shadow-blue-500/5',
+    glow: 'hover:border-blue-500/30',
   },
   {
     id: 'prime',
     name: 'Zero Prime',
-    sub: '5/day free',
-    badge: { text: 'Free tier', cls: 'bg-violet-500/15 text-violet-400 border-violet-500/20' },
+    desc: 'Balanced power',
+    badge: 'Free Tier',
+    badgeColor: 'bg-violet-500/15 text-violet-400 border-violet-500/20',
     icon: <Brain className="h-5 w-5 text-violet-400" />,
-    glow: 'hover:border-violet-500/30 hover:shadow-violet-500/5',
+    glow: 'hover:border-violet-500/30',
   },
   {
     id: 'apex',
     name: 'Zero Apex',
-    sub: '3/day free',
-    badge: { text: 'Pro+', cls: 'bg-zero-300/15 text-zero-300 border-zero-300/20' },
+    desc: 'Maximum intelligence',
+    badge: 'Pro+',
+    badgeColor: 'bg-zero-300/15 text-zero-300 border-zero-300/20',
     icon: <Rocket className="h-5 w-5 text-zero-300" />,
-    glow: 'hover:border-zero-300/30 hover:shadow-zero-300/5',
+    glow: 'hover:border-zero-300/30',
   },
   {
-    id: 'agentic-chad',
-    name: 'Agentic Chad',
-    sub: 'Autonomous',
-    badge: { text: 'Ultra only', cls: 'bg-orange-500/15 text-orange-400 border-orange-500/20' },
+    id: 'agentic',
+    name: 'Agentic Mode',
+    desc: 'Autonomous agent',
+    badge: 'Ultra',
+    badgeColor: 'bg-orange-500/15 text-orange-400 border-orange-500/20',
     icon: <Wand2 className="h-5 w-5 text-orange-400" />,
-    glow: 'hover:border-orange-500/30 hover:shadow-orange-500/5',
+    glow: 'hover:border-orange-500/30',
   },
 ]
 
-// ─── Capabilities ────────────────────────────────────────────────────────────
+// Core capabilities
 const CAPABILITIES = [
-  { icon: <Globe className="h-4 w-4 text-blue-400" />,     label: 'Live Web Search',      desc: 'Tavily · real-time data' },
-  { icon: <Code className="h-4 w-4 text-emerald-400" />,   label: 'App Factory',           desc: 'Gemini 2.5 → live URL' },
-  { icon: <Database className="h-4 w-4 text-violet-400" />, label: 'Vector Memory',         desc: 'Astra DB · persists forever' },
-  { icon: <ImageIcon className="h-4 w-4 text-pink-400" />, label: 'Image Generation',      desc: 'Flux Schnell · free' },
-  { icon: <Terminal className="h-4 w-4 text-orange-400" />, label: 'Code Sandbox',          desc: 'Execute · preview · deploy' },
-  { icon: <Mic className="h-4 w-4 text-red-400" />,        label: 'Voice AI',              desc: 'STT + TTS built in' },
-  { icon: <Zap className="h-4 w-4 text-yellow-400" />,     label: 'Key Rotation',          desc: '20+ API keys in rotation' },
-  { icon: <Sparkles className="h-4 w-4 text-zero-300" />,  label: 'Extended Thinking',     desc: 'Apex & Agentic modes' },
-]
-
-// ─── Stats ───────────────────────────────────────────────────────────────────
-const STATS = [
-  { value: '5', label: 'AI tiers', suffix: '' },
-  { value: '20', label: 'API keys rotated', suffix: '+' },
-  { value: '₹299', label: 'Pro / month', suffix: '' },
-  { value: '100%', label: 'Pico is local', suffix: '' },
+  { icon: <Globe className="h-4 w-4 text-blue-400" />, label: 'Live Web Search', desc: 'Real-time information' },
+  { icon: <Code className="h-4 w-4 text-emerald-400" />, label: 'App Factory', desc: 'Generate full apps' },
+  { icon: <Database className="h-4 w-4 text-violet-400" />, label: 'Memory', desc: 'Remembers everything' },
+  { icon: <ImageIcon className="h-4 w-4 text-pink-400" />, label: 'Image Generation', desc: 'Create visuals' },
+  { icon: <Mic className="h-4 w-4 text-red-400" />, label: 'Voice AI', desc: 'Talk naturally' },
+  { icon: <Shield className="h-4 w-4 text-yellow-400" />, label: 'Privacy First', desc: 'Your data stays yours' },
 ]
 
 export function HeroSection() {
   return (
-    <section className="relative flex min-h-screen flex-col items-center justify-center px-4 pt-16 pb-24 overflow-hidden">
-
-      {/* ── Background ── */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden" suppressHydrationWarning>
-        {/* Main glow */}
-        <div className="absolute left-1/2 top-1/3 h-[700px] w-[700px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-zero-glow-strong blur-3xl opacity-60" />
-        {/* Grid pattern */}
+    <section className="relative flex min-h-screen flex-col items-center justify-center px-4 pt-20 pb-24 overflow-hidden">
+      {/* Background */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute left-1/2 top-1/3 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-zero-glow-strong blur-3xl opacity-50" />
         <div
-          className="absolute inset-0 opacity-[0.025]"
+          className="absolute inset-0 opacity-[0.02]"
           style={{
-            backgroundImage: `
-              linear-gradient(var(--zero-300) 1px, transparent 1px),
-              linear-gradient(90deg, var(--zero-300) 1px, transparent 1px)
-            `,
-            backgroundSize: '60px 60px',
+            backgroundImage: `linear-gradient(var(--zero-300) 1px, transparent 1px), linear-gradient(90deg, var(--zero-300) 1px, transparent 1px)`,
+            backgroundSize: '80px 80px',
           }}
         />
       </div>
 
-      <div className="relative z-10 flex w-full max-w-6xl flex-col items-center text-center gap-0">
-
-        {/* ── Badge ── */}
-        <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-zero-300/30 bg-zero-300/10 px-4 py-1.5">
+      <div className="relative z-10 flex w-full max-w-5xl flex-col items-center text-center">
+        {/* Badge */}
+        <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-zero-300/30 bg-zero-300/10 px-4 py-2">
           <span className="h-2 w-2 rounded-full bg-zero-300 animate-pulse" />
-          <span className="text-sm font-medium text-zero-300">Free to start · No credit card</span>
+          <span className="text-sm font-medium text-zero-300">Free to start</span>
         </div>
 
-        {/* ── Mascot ── */}
-        <div className="mb-6 relative">
-          <ZeroMascot size={130} state="happy" mood="excited" interactive />
+        {/* Mascot */}
+        <div className="mb-8 relative">
+          <ZeroMascot size={120} state="happy" mood="excited" interactive />
           <div className="absolute inset-0 -z-10 flex items-center justify-center">
-            <div className="h-36 w-36 rounded-full border border-zero-300/15 animate-ping" style={{ animationDuration: '3s' }} />
+            <div className="h-32 w-32 rounded-full border border-zero-300/20 animate-ping" style={{ animationDuration: '3s' }} />
           </div>
         </div>
 
-        {/* ── Headline ── */}
-        <h1 className="mb-4 text-5xl font-light tracking-tight text-text-1 md:text-7xl leading-tight">
-          Meet{' '}
-          <span className="text-zero-300 font-semibold">Zero</span>
-          <br />
-          <span className="text-3xl md:text-4xl font-light text-text-2">
-            Your entire AI stack. One app.
+        {/* Headline */}
+        <h1 className="mb-6 text-balance">
+          <span className="block text-5xl font-light tracking-tight text-text-1 md:text-7xl">
+            Meet <span className="text-zero-300 font-semibold">Zero</span>
+          </span>
+          <span className="block mt-3 text-2xl md:text-3xl font-light text-text-2">
+            Your complete AI assistant
           </span>
         </h1>
 
-        {/* ── Sub ── */}
-        <p className="mb-8 max-w-2xl text-lg text-text-2 leading-relaxed">
-          5 AI tiers from on-device Qwen 0.5B to agentic Gemini 2.0 Flash.
-          Built-in App Factory, vector memory, live search, image gen & voice.
-          <span className="text-zero-300 font-medium"> Start free.</span>
+        {/* Subheadline */}
+        <p className="mb-10 max-w-xl text-lg text-text-2 leading-relaxed text-pretty">
+          5 AI tiers from on-device to autonomous agents.
+          Built-in app creation, memory, web search, image generation, and voice.
         </p>
 
-        {/* ── CTAs ── */}
-        <div className="flex flex-col items-center gap-3 sm:flex-row mb-12">
+        {/* CTAs */}
+        <div className="flex flex-col items-center gap-3 sm:flex-row mb-16">
           <Link
             href="/chat"
-            className="group flex items-center gap-2 rounded-full bg-zero-300 px-8 py-3.5 text-base font-semibold text-bg-0 transition-all hover:bg-zero-400 hover:shadow-lg hover:shadow-zero-300/20"
+            className="group flex items-center gap-2 rounded-full bg-zero-300 px-8 py-4 text-base font-semibold text-bg-0 transition-all hover:bg-zero-400 hover:shadow-lg hover:shadow-zero-300/25"
           >
             Start chatting free
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
           </Link>
           <Link
             href="/pricing"
-            className="flex items-center gap-2 rounded-full border border-border bg-bg-1 px-8 py-3.5 text-base font-medium text-text-1 transition-all hover:border-border-hover hover:bg-bg-2"
+            className="flex items-center gap-2 rounded-full border border-border bg-bg-1 px-8 py-4 text-base font-medium text-text-1 transition-all hover:border-border-hover hover:bg-bg-2"
           >
-            ₹299/mo Pro
+            View plans
             <Sparkles className="h-4 w-4 text-zero-300" />
           </Link>
         </div>
 
-        {/* ── Stats bar ── */}
-        <div className="mb-16 flex flex-wrap justify-center gap-px rounded-2xl border border-border bg-border overflow-hidden">
-          {STATS.map(s => (
-            <div key={s.label} className="flex flex-col items-center px-6 py-4 bg-bg-1 flex-1 min-w-[100px]">
-              <span className="text-2xl font-black text-text-1">
-                {s.value}<span className="text-zero-300">{s.suffix}</span>
-              </span>
-              <span className="text-xs text-text-3 mt-0.5 whitespace-nowrap">{s.label}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* ── Tier cards ── */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 w-full mb-8">
-          {TIERS.map(tier => (
-            <div
-              key={tier.id}
-              className={[
-                'group flex flex-col gap-2 rounded-2xl border border-border bg-bg-1 p-4 text-left',
-                'transition-all hover:bg-bg-2 hover:shadow-lg',
-                tier.glow,
-              ].join(' ')}
-            >
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-bg-2 border border-border">
-                  {tier.icon}
+        {/* Tier cards */}
+        <div className="w-full mb-12">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {TIERS.map(tier => (
+              <div
+                key={tier.id}
+                className={`group flex flex-col gap-3 rounded-2xl border border-border bg-bg-1 p-4 text-left transition-all hover:bg-bg-2 ${tier.glow}`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-bg-2 border border-border group-hover:bg-bg-3">
+                    {tier.icon}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-text-1 truncate">{tier.name}</p>
+                    <p className="text-xs text-text-3">{tier.desc}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-text-1 leading-tight">{tier.name}</p>
-                  <p className="text-[10px] text-text-3">{tier.sub}</p>
-                </div>
+                <span className={`text-[10px] font-bold px-2 py-1 rounded-full border w-fit uppercase tracking-wider ${tier.badgeColor}`}>
+                  {tier.badge}
+                </span>
               </div>
-              <span className={['text-[9px] font-bold px-2 py-0.5 rounded-full border w-fit uppercase tracking-wider', tier.badge.cls].join(' ')}>
-                {tier.badge.text}
-              </span>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
-        {/* ── Capabilities grid ── */}
+        {/* Capabilities */}
         <div className="w-full rounded-2xl border border-border bg-bg-1/80 backdrop-blur-sm p-6">
           <div className="flex items-center gap-2 mb-5">
             <Wand2 className="h-5 w-5 text-zero-300" />
             <h2 className="text-base font-semibold text-text-1">Everything built in</h2>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {CAPABILITIES.map(cap => (
               <div
                 key={cap.label}
-                className="flex items-start gap-3 rounded-xl border border-border bg-bg-2 p-3 text-left hover:border-border-hover hover:bg-bg-3 transition-all"
+                className="flex flex-col items-center gap-2 rounded-xl border border-border bg-bg-2 p-4 text-center hover:border-border-hover hover:bg-bg-3 transition-all"
               >
-                <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-bg-3 border border-border">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-bg-3 border border-border">
                   {cap.icon}
                 </div>
                 <div>
@@ -207,7 +179,7 @@ export function HeroSection() {
           </div>
         </div>
 
-        {/* ── Social proof ── */}
+        {/* Trust indicators */}
         <div className="mt-10 flex flex-wrap justify-center items-center gap-6 text-sm text-text-3">
           <span className="flex items-center gap-1.5">
             <span className="flex">
