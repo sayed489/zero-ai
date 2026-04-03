@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Send, Cpu, Globe, Code, Image, Box, Terminal, Chrome, FileText, Zap, WifiOff, ChevronDown, ChevronUp, Clock, Check, X, Volume2, Loader2 } from 'lucide-react'
+import { Send, Globe, Code, Image, Terminal, FileText, Chrome, Zap, Loader2, Bot, AlertCircle, Download } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AgentDownload } from './AgentDownload'
 import { ActionFeed, ActionItem } from './ActionFeed'
@@ -25,11 +25,17 @@ const TOOL_ICONS: Record<string, any> = {
   web_search: Globe,
   generate_code: Code,
   generate_image: Image,
-  generate_3d_model: Box,
-  memory_save: Cpu,
-  memory_recall: Cpu,
+  memory_save: Bot,
+  memory_recall: Bot,
   take_screenshot: Image,
 }
+
+const EXAMPLE_PROMPTS = [
+  "Search GitHub trending repos today",
+  "Write a Python web scraper",
+  "Generate an isometric city image",
+  "Create a daily email digest workflow"
+]
 
 export function AgenticChat({ userId }: { userId?: string }) {
   const [messages, setMessages] = useState<Message[]>([])
@@ -40,7 +46,6 @@ export function AgenticChat({ userId }: { userId?: string }) {
   const [liveActions, setLiveActions] = useState<ActionItem[]>([])
   const [statusText, setStatusText] = useState('Ready')
   const bottomRef = useRef<HTMLDivElement>(null)
-  const wsRef = useRef<WebSocket | null>(null)
 
   // Check Python agent connection
   useEffect(() => {
@@ -68,7 +73,7 @@ export function AgenticChat({ userId }: { userId?: string }) {
     setInput('')
     setIsRunning(true)
     setLiveActions([])
-    setStatusText('Thinking...')
+    setStatusText('Planning...')
 
     const assistantId = `ast_${Date.now()}`
     let accContent = ''
@@ -141,8 +146,6 @@ export function AgenticChat({ userId }: { userId?: string }) {
               accImages = [...accImages, event.url]
             } else if (event.type === 'code') {
               accCode = [...accCode, { language: event.language, content: event.content }]
-            } else if (event.type === 'screenshot') {
-              // screenshots come from Python agent via client
             }
 
             setMessages(prev => prev.map(m =>
@@ -156,7 +159,7 @@ export function AgenticChat({ userId }: { userId?: string }) {
     } catch (e: any) {
       setStatusText('Error')
       setMessages(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: `Zero Agentic error: ${e.message}` } : m
+        m.id === assistantId ? { ...m, content: `Agentic error: ${e.message}` } : m
       ))
     } finally {
       setIsRunning(false)
@@ -166,24 +169,24 @@ export function AgenticChat({ userId }: { userId?: string }) {
 
   return (
     <div className="flex h-full bg-bg-0">
-      {/* Left — Conversation */}
+      {/* Left - Conversation */}
       <div className="flex flex-col flex-1 min-w-0 border-r border-border">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-bg-1">
           <div className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-zero-300 to-zero-600 flex items-center justify-center">
-              <Zap className="h-4 w-4 text-white" />
+            <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-zero-300 to-zero-500 flex items-center justify-center shadow-lg shadow-zero-300/20">
+              <Bot className="h-4.5 w-4.5 text-white" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-text-1">Zero Agentic</p>
-              <p className="text-[11px] text-text-3">One Man CEO Mode</p>
+              <p className="text-sm font-semibold text-text-1">Agentic Chad</p>
+              <p className="text-[11px] text-text-3">Autonomous AI Agent</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {/* Status badge */}
             <div className={cn(
-              'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium',
-              isRunning ? 'bg-zero-500/10 text-zero-400' : 'bg-bg-2 text-text-2'
+              'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
+              isRunning ? 'bg-zero-300/10 text-zero-300' : 'bg-bg-2 text-text-2'
             )}>
               {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
               {statusText}
@@ -191,16 +194,16 @@ export function AgenticChat({ userId }: { userId?: string }) {
             {/* Agent connection indicator */}
             <button
               onClick={() => setShowDownload(true)}
-              title={agentConnected ? 'Python agent connected' : 'Python agent not connected'}
+              title={agentConnected ? 'Agent connected' : 'Agent not connected'}
               className={cn(
-                'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
                 agentConnected
-                  ? 'bg-green-500/10 text-green-400'
-                  : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                  ? 'bg-emerald-500/10 text-emerald-400'
+                  : 'bg-orange-500/10 text-orange-400 hover:bg-orange-500/20'
               )}
             >
-              <span className={cn('h-2 w-2 rounded-full', agentConnected ? 'bg-green-400' : 'bg-red-400')} />
-              {agentConnected ? 'Agent connected' : 'Agent offline'}
+              <span className={cn('h-2 w-2 rounded-full', agentConnected ? 'bg-emerald-400' : 'bg-orange-400 animate-pulse')} />
+              {agentConnected ? 'Agent online' : 'Agent offline'}
             </button>
           </div>
         </div>
@@ -208,18 +211,38 @@ export function AgenticChat({ userId }: { userId?: string }) {
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
           {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
-              <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-zero-300/20 to-zero-600/10 border border-zero-500/20 flex items-center justify-center">
-                <Zap className="h-8 w-8 text-zero-400" />
+            <div className="flex flex-col items-center justify-center h-full gap-6 text-center">
+              <div className="h-20 w-20 rounded-2xl bg-gradient-to-br from-zero-300/20 to-zero-500/10 border border-zero-300/20 flex items-center justify-center">
+                <Bot className="h-10 w-10 text-zero-300" />
               </div>
               <div>
-                <p className="text-text-1 font-semibold">Zero Agentic is ready</p>
-                <p className="text-text-3 text-sm mt-1">Give me any task — I can browse the web, write code, control your laptop, generate media, and more.</p>
+                <p className="text-text-1 font-semibold text-lg">Agentic Chad is ready</p>
+                <p className="text-text-3 text-sm mt-2 max-w-md">
+                  Give me any task and I will execute it. I can browse the web, write code, generate images, and more.
+                </p>
               </div>
-              <div className="grid grid-cols-2 gap-2 max-w-md">
-                {["Search GitHub trending repos today", "Write a Python web scraper", "Generate an isometric city image", "Create N8N workflow for daily email digest"].map(ex => (
-                  <button key={ex} onClick={() => setInput(ex)}
-                    className="rounded-xl border border-border bg-bg-1 px-3 py-2 text-xs text-text-2 hover:text-text-1 hover:border-zero-500/40 hover:bg-bg-2 transition-all text-left">
+              
+              {!agentConnected && (
+                <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-orange-500/10 border border-orange-500/20 text-orange-400 text-sm">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>Desktop agent not connected. Some features require it.</span>
+                  <button 
+                    onClick={() => setShowDownload(true)}
+                    className="flex items-center gap-1 ml-2 underline hover:no-underline"
+                  >
+                    <Download className="h-3 w-3" />
+                    Download
+                  </button>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 max-w-lg mt-2">
+                {EXAMPLE_PROMPTS.map(ex => (
+                  <button 
+                    key={ex} 
+                    onClick={() => setInput(ex)}
+                    className="rounded-xl border border-border bg-bg-1 px-4 py-3 text-sm text-text-2 hover:text-text-1 hover:border-zero-300/40 hover:bg-bg-2 transition-all text-left"
+                  >
                     {ex}
                   </button>
                 ))}
@@ -230,17 +253,17 @@ export function AgenticChat({ userId }: { userId?: string }) {
           {messages.map(msg => (
             <div key={msg.id} className={cn('flex gap-3', msg.role === 'user' && 'justify-end')}>
               {msg.role === 'assistant' && (
-                <div className="h-8 w-8 shrink-0 rounded-xl bg-gradient-to-br from-zero-300 to-zero-600 flex items-center justify-center mt-0.5">
-                  <Zap className="h-3.5 w-3.5 text-white" />
+                <div className="h-8 w-8 shrink-0 rounded-xl bg-gradient-to-br from-zero-300 to-zero-500 flex items-center justify-center mt-0.5 shadow-lg shadow-zero-300/10">
+                  <Bot className="h-4 w-4 text-white" />
                 </div>
               )}
               <div className={cn(
                 'max-w-[80%] rounded-2xl px-4 py-3 text-sm',
                 msg.role === 'user'
-                  ? 'bg-zero-500 text-white rounded-tr-sm'
-                  : 'bg-bg-1 border border-border text-text-1 rounded-tl-sm'
+                  ? 'bg-zero-300 text-bg-0 rounded-tr-md'
+                  : 'bg-bg-1 border border-border text-text-1 rounded-tl-md'
               )}>
-                <p className="whitespace-pre-wrap leading-relaxed">{msg.content || (msg.role === 'assistant' && isRunning ? '...' : '')}</p>
+                <p className="whitespace-pre-wrap leading-relaxed">{msg.content || (msg.role === 'assistant' && isRunning ? 'Thinking...' : '')}</p>
 
                 {/* Generated images */}
                 {msg.images && msg.images.length > 0 && (
@@ -257,7 +280,7 @@ export function AgenticChat({ userId }: { userId?: string }) {
                     {msg.codeBlocks.map((cb, i) => (
                       <div key={i} className="rounded-xl bg-bg-0 border border-border overflow-hidden">
                         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-bg-2">
-                          <Code className="h-3 w-3 text-zero-400" />
+                          <Code className="h-3 w-3 text-zero-300" />
                           <span className="text-xs text-text-3">{cb.language}</span>
                         </div>
                         <pre className="p-3 text-xs text-text-2 overflow-x-auto"><code>{cb.content}</code></pre>
@@ -278,14 +301,14 @@ export function AgenticChat({ userId }: { userId?: string }) {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
-              placeholder="Give Zero Agentic any task..."
+              placeholder="Give me any task..."
               rows={1}
               className="flex-1 resize-none bg-transparent text-sm text-text-1 placeholder:text-text-3 focus:outline-none max-h-32"
             />
             <button
               onClick={sendMessage}
               disabled={!input.trim() || isRunning}
-              className="shrink-0 h-8 w-8 rounded-xl bg-zero-500 text-white flex items-center justify-center hover:bg-zero-400 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              className="shrink-0 h-9 w-9 rounded-xl bg-zero-300 text-bg-0 flex items-center justify-center hover:bg-zero-400 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             >
               {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </button>
@@ -293,12 +316,14 @@ export function AgenticChat({ userId }: { userId?: string }) {
         </div>
       </div>
 
-      {/* Right — Live Action Feed */}
-      <div className="w-[380px] shrink-0 flex flex-col bg-bg-1">
+      {/* Right - Live Action Feed */}
+      <div className="w-[360px] shrink-0 flex flex-col bg-bg-1 hidden lg:flex">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <p className="text-sm font-semibold text-text-1">Action Feed</p>
           {liveActions.length > 0 && (
-            <span className="rounded-full bg-zero-500/10 text-zero-400 text-xs px-2 py-0.5">{liveActions.length} steps</span>
+            <span className="rounded-full bg-zero-300/10 text-zero-300 text-xs px-2.5 py-0.5 font-medium">
+              {liveActions.length} steps
+            </span>
           )}
         </div>
         <div className="flex-1 overflow-y-auto">

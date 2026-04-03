@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { X, Maximize2, Minimize2, RotateCcw, FileCode, FolderOpen, Terminal, Eye, ChevronDown, ChevronRight } from 'lucide-react'
+import { X, Maximize2, Minimize2, RotateCcw, FolderOpen, Terminal, Eye, Copy, Check, Sparkles } from 'lucide-react'
 import {
   SandpackProvider,
   SandpackLayout,
@@ -25,6 +25,7 @@ export function AppFactory({ files, description, onClose }: AppFactoryProps) {
   const [key, setKey] = useState(0)
   const [bottomPanel, setBottomPanel] = useState<PanelView>('preview')
   const [showFileExplorer, setShowFileExplorer] = useState(true)
+  const [copied, setCopied] = useState(false)
 
   // Normalize & enrich files for Sandpack compatibility
   const sandpackFiles = useMemo(() => {
@@ -55,8 +56,10 @@ export function AppFactory({ files, description, onClose }: AppFactoryProps) {
 }
 
 body {
-  font-family: 'Inter', sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  background: #0a0a0a;
+  color: #fafafa;
 }
 `
     }
@@ -66,83 +69,107 @@ body {
 
   const fileCount = Object.keys(sandpackFiles).length
 
+  const handleCopyCode = async () => {
+    const mainFile = sandpackFiles['/App.tsx'] || sandpackFiles['/App.jsx'] || Object.values(sandpackFiles)[0]
+    await navigator.clipboard.writeText(mainFile)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
   return (
-    <div className={`flex w-full flex-col bg-[#1e1e2e] border-l border-[#313244] animate-in slide-in-from-right duration-300 ${
+    <div className={`flex w-full flex-col bg-bg-0 border-l border-border animate-in slide-in-from-right duration-300 ${
       isFullscreen ? 'fixed inset-0 z-50' : 'h-full'
     }`}>
-      {/* Top Header Bar */}
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-[#313244] bg-[#181825] px-3">
+      {/* Premium Header Bar */}
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-bg-1 px-4">
         <div className="flex items-center gap-3">
-          {/* Traffic lights */}
-          <div className="flex gap-1.5">
-            <button onClick={onClose} className="h-3 w-3 rounded-full bg-[#f38ba8] hover:brightness-110 transition-all" />
-            <button onClick={() => setIsFullscreen(!isFullscreen)} className="h-3 w-3 rounded-full bg-[#f9e2af] hover:brightness-110 transition-all" />
-            <button onClick={() => setIsFullscreen(!isFullscreen)} className="h-3 w-3 rounded-full bg-[#a6e3a1] hover:brightness-110 transition-all" />
+          {/* App icon */}
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-zero-300 to-zero-500">
+            <Sparkles className="h-4 w-4 text-white" />
           </div>
-          <div className="flex items-center gap-2 text-[#cdd6f4]">
-            <FileCode className="h-3.5 w-3.5 text-[#89b4fa]" />
-            <span className="text-xs font-medium">Nano App Factory</span>
-            <span className="text-[10px] text-[#6c7086]">·</span>
-            <span className="text-[10px] text-[#6c7086]">{fileCount} files</span>
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold text-text-1">Zero App Factory</span>
+            <span className="text-[10px] text-text-3">{fileCount} files generated</span>
           </div>
           {description && (
-            <span className="hidden lg:inline text-[10px] text-[#6c7086] max-w-[250px] truncate">
-              — {description}
-            </span>
+            <div className="hidden lg:flex items-center gap-2 ml-3 pl-3 border-l border-border">
+              <span className="text-[11px] text-text-2 max-w-[200px] truncate">{description}</span>
+            </div>
           )}
         </div>
 
         <div className="flex items-center gap-1">
           <button
+            onClick={handleCopyCode}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium text-text-2 transition-colors hover:text-text-1 hover:bg-bg-2"
+            title="Copy main code"
+          >
+            {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+            <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
+          </button>
+          <button
             onClick={() => setShowFileExplorer(!showFileExplorer)}
-            className={`flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors ${
-              showFileExplorer ? 'bg-[#313244] text-[#cdd6f4]' : 'text-[#6c7086] hover:text-[#cdd6f4]'
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors ${
+              showFileExplorer ? 'bg-bg-2 text-text-1' : 'text-text-2 hover:text-text-1 hover:bg-bg-2'
             }`}
             title="Toggle file explorer"
           >
-            <FolderOpen className="h-3 w-3" />
+            <FolderOpen className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Files</span>
           </button>
           <button
             onClick={() => setKey(k => k + 1)}
-            className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-[#6c7086] hover:text-[#cdd6f4] transition-colors"
-            title="Restart"
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium text-text-2 hover:text-text-1 hover:bg-bg-2 transition-colors"
+            title="Restart preview"
           >
-            <RotateCcw className="h-3 w-3" />
+            <RotateCcw className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-[#6c7086] hover:text-[#cdd6f4] transition-colors"
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium text-text-2 hover:text-text-1 hover:bg-bg-2 transition-colors"
             title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
           >
-            {isFullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+            {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            onClick={onClose}
+            className="ml-1 flex items-center justify-center rounded-lg p-1.5 text-text-2 hover:text-text-1 hover:bg-bg-2 transition-colors"
+            title="Close"
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
       </div>
 
-      {/* Right Panel Tabs: Preview / Console */}
-      <div className="flex h-8 shrink-0 items-center border-b border-[#313244] bg-[#181825]">
+      {/* Panel Tabs: Preview / Console */}
+      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-bg-1 px-4">
         <button
           onClick={() => setBottomPanel('preview')}
-          className={`flex items-center gap-1.5 px-4 h-full text-[11px] font-medium border-b-2 transition-colors ${
+          className={`flex items-center gap-1.5 px-4 py-2 text-[11px] font-medium rounded-lg transition-colors ${
             bottomPanel === 'preview'
-              ? 'border-[#89b4fa] text-[#cdd6f4] bg-[#1e1e2e]'
-              : 'border-transparent text-[#6c7086] hover:text-[#a6adc8]'
+              ? 'bg-bg-2 text-text-1'
+              : 'text-text-3 hover:text-text-1 hover:bg-bg-2'
           }`}
         >
-          <Eye className="h-3 w-3" />
+          <Eye className="h-3.5 w-3.5" />
           Preview
         </button>
         <button
           onClick={() => setBottomPanel('console')}
-          className={`flex items-center gap-1.5 px-4 h-full text-[11px] font-medium border-b-2 transition-colors ${
+          className={`flex items-center gap-1.5 px-4 py-2 text-[11px] font-medium rounded-lg transition-colors ${
             bottomPanel === 'console'
-              ? 'border-[#89b4fa] text-[#cdd6f4] bg-[#1e1e2e]'
-              : 'border-transparent text-[#6c7086] hover:text-[#a6adc8]'
+              ? 'bg-bg-2 text-text-1'
+              : 'text-text-3 hover:text-text-1 hover:bg-bg-2'
           }`}
         >
-          <Terminal className="h-3 w-3" />
-          Terminal
+          <Terminal className="h-3.5 w-3.5" />
+          Console
         </button>
+        <div className="flex-1" />
+        <div className="flex items-center gap-2 text-[10px] text-text-3">
+          <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span>Live</span>
+        </div>
       </div>
 
       {/* Main Content: Sandpack IDE */}
@@ -157,12 +184,13 @@ body {
               "framer-motion": "latest",
               "react-icons": "latest",
               "clsx": "latest",
+              "tailwind-merge": "latest",
             },
             entry: "/App.tsx"
           }}
           options={{
             recompileMode: "delayed",
-            recompileDelay: 500,
+            recompileDelay: 400,
           }}
         >
           <SandpackLayout
@@ -170,7 +198,7 @@ body {
               border: 'none',
               borderRadius: 0,
               height: '100%',
-              background: '#1e1e2e',
+              background: '#0e0e10',
             }}
           >
             {/* File Explorer Panel */}
@@ -179,9 +207,9 @@ body {
                 style={{
                   height: '100%',
                   minWidth: '180px',
-                  maxWidth: '220px',
-                  borderRight: '1px solid #313244',
-                  background: '#181825',
+                  maxWidth: '200px',
+                  borderRight: '1px solid #2c2c34',
+                  background: '#141416',
                 }}
               />
             )}
